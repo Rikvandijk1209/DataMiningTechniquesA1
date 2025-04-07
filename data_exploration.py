@@ -152,5 +152,22 @@ class DataExplorer:
         # Sort the columns
         return df_pivot.select(["id", "date"] + [var for var in unique_variables])
                 
+    def plot_time_series_data(self, df: pl.DataFrame):
+        """
+        Plot the time series data for each variable.
+        """
+        # Convert the polars DataFrame to a pandas DataFrame
+        df_pd = df.sort("date").to_pandas()
+        # Get the unique variables
+        unique_var = df.columns[2:]
+        for var in unique_var:
+            df_agg = df_pd.groupby("date").agg({var: "mean"})
+            # Plot the time series data
+            plt.figure(figsize=(10, 6))
+            plt.plot(df_agg[var])
+            plt.title(f"Time series plot of avg over id of {var} per day")
+            plt.xlabel("Date")
+            plt.ylabel(var)
+            plt.show()
 
         
