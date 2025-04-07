@@ -23,7 +23,7 @@ def get_root_path(target_dir: str) -> str:
         raise ValueError(f"Directory '{target_dir}' not found in the path.")
 
 
-PROJECT_ROOT = get_root_path("sparo")
+PROJECT_ROOT = get_root_path("DataMiningTechniquesA1")
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
     print(f"Added the path ({PROJECT_ROOT}) to sys.path")
