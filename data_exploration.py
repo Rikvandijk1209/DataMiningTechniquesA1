@@ -112,26 +112,26 @@ class DataExplorer:
             plt.show()
 
 
-    def transform_data(self, df: pl.DataFrame) -> pl.DataFrame:
+    def transform_data(self, df: pl.DataFrame, truncation_string:str) -> pl.DataFrame:
         """
         Transform the data from long format to a pivot table. Aggregate the data on date level with value aggregation by specified format.
         The interval of dates was used with 1 day as the eventual target is to predict mood per day.
         """
         # Aggregate on date (day) level
-        df = df.with_columns(pl.col("time").dt.date().alias("date"))
+        df = df.with_columns(pl.col("time").dt.truncate(truncation_string).alias("truncated_time"))
         # Here we apply all necessary transformations to later select per variable which to use
-        df_agg = df.group_by(["id", "date", "variable"]).agg([
+        df_agg = df.group_by(["id", "truncated_time", "variable"]).agg([
             pl.col("value").sum().alias("value_sum"), 
             pl.col("value").mean().alias("value_mean"),
-            ]).sort(["id", "date", "variable"])
+            ]).sort(["id", "truncated_time", "variable"])
         
         df_pivot:pl.DataFrame = df_agg.pivot(
             values=["value_sum", "value_mean"],
-            index = ["id", "date"],
+            index = ["id", "truncated_time"],
             columns = "variable",
         )
         # Specify for which variables we should use the mean, the others will use the sum
-        mean_col = ["mood", "cirumplex.arousal", "circumplex.valence", "activity"]
+        mean_col = ["mood", "circumplex.arousal", "circumplex.valence", "activity"]
         # Get the columns that are not in mean_col
         unique_variables = df_agg["variable"].unique().sort().to_list()
         sum_col = list(set(unique_variables) - set(mean_col))
@@ -150,7 +150,7 @@ class DataExplorer:
         df_pivot = df_pivot.drop(drop_columns)
            
         # Sort the columns
-        return df_pivot.select(["id", "date"] + [var for var in unique_variables])
+        return df_pivot.select(["id", "truncated_time"] + [var for var in unique_variables])
                 
     def plot_time_series_data(self, df: pl.DataFrame):
         """
