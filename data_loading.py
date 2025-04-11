@@ -7,6 +7,21 @@ from datetime import datetime, timedelta
 class DataLoader:
     def __init__(self):
         pass
+    
+    def load_and_transform_data(self, interval:str) -> pl.DataFrame:
+        """
+        Load the data from the specified path, transform it to a pivot table, and fill in missing dates.
+        """
+        # Load the data
+        df = self.load_data()
+        
+        # Transform the data to a pivot table
+        df_pivot = self.transform_data(df, interval)
+        
+        # Fill in missing dates
+        df_filled = self.fill_date_ranges(df_pivot, interval)
+        
+        return df_filled
 
     def load_data(self) -> pl.DataFrame:
         """
