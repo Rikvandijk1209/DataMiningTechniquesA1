@@ -121,9 +121,8 @@ class DataLoader:
         """
         # Firstly it does not make sense to fill missing values for the mood as this will be the target variable
         # Therefore we will drop the rows with missing values for the mood
-        print(df)
         df = df.drop_nulls(subset=["mood"])
-        print(df)
+
         # We now define the numerical columns for which we should do interpolation 
         # Note that these are the same as the mean columns from before (minus the mood column)
         cols_interpolate = ["circumplex.arousal", "circumplex.valence", "activity"]
