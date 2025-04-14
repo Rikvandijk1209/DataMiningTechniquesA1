@@ -18,10 +18,13 @@ class DataLoader:
         # Transform the data to a pivot table
         df_pivot = self.transform_data(df, interval)
         
-        # Fill in missing dates
-        df_filled = self.fill_date_ranges(df_pivot, interval)
+        # Fill in missing dates, this method is skipped for now as rows that are missing for the mood are dropped
+        # df_filled = self.fill_date_ranges(df_pivot, interval)
+
+        # Handle missing values
+        df_interpolated = self.handle_missing_values(df_pivot)
         
-        return df_filled
+        return df_interpolated
 
     def load_data(self) -> pl.DataFrame:
         """
@@ -89,6 +92,9 @@ class DataLoader:
     def fill_date_ranges(self, df: pl.DataFrame, interval:str) -> pl.DataFrame:
         """
         Fill the date ranges for each id in the DataFrame.
+
+        NOTE: Since we drop the rows with missing values for the mood, this method becomes obsolete.
+        I still keep it here as it might be useful in the future or for some data analysis.
         """
         date_range = pd.date_range(
             start=df["truncated_time"].min(),
@@ -105,3 +111,48 @@ class DataLoader:
         # Join the original DataFrame with the cross-joined DataFrame
         filled_df = cross_joined.join(df, on=["id", "truncated_time"], how="left")
         return filled_df
+    
+    def handle_missing_values(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Handle missing values in the DataFrame. We will fill the numerical columns with 0 and interpolate the other columns in which
+        zeros dont make sense.
+        The columns that are filled with 0 are the sum columns from before, the columns that are interpolated are the mean columns from before.
+        The mood column is the target variable and should not be filled with 0 or interpolated. Therefore we drop the rows with missing values for the mood.
+        """
+        # Firstly it does not make sense to fill missing values for the mood as this will be the target variable
+        # Therefore we will drop the rows with missing values for the mood
+        print(df)
+        df = df.drop_nulls(subset=["mood"])
+        print(df)
+        # We now define the numerical columns for which we should do interpolation 
+        # Note that these are the same as the mean columns from before (minus the mood column)
+        cols_interpolate = ["circumplex.arousal", "circumplex.valence", "activity"]
+
+        # Next we get the remaining columns for which we fill in 0, these are the sum columns from before
+        cols = df.columns
+        cols_fill_zero = list(set(cols) - set(cols_interpolate) - {"id", "truncated_time", "mood"})
+
+        # Ensure the DataFrame is sorted properly for time-based interpolation
+        df = df.sort(by=["id", "truncated_time"])
+        # Fill 0s
+        df_filled = df.with_columns([
+            pl.col(col).fill_null(0) for col in cols_fill_zero
+        ])
+
+        # Interpolate within each panel group
+        df_interpolated = (
+            df_filled
+            .group_by("id", maintain_order=True)
+            .agg([
+                pl.col("truncated_time"),
+                *[pl.col(col).interpolate() for col in cols_interpolate],
+                *[pl.col(col) for col in df.columns if col not in cols_interpolate and col not in ["truncated_time", "id"]],
+            ])
+            .explode(df.columns[1:])
+        )
+
+        # Sort the DataFrame by id and truncated_time
+        df_interpolated = df_interpolated.sort(by=["id", "truncated_time"])
+        return df_interpolated
+
+
