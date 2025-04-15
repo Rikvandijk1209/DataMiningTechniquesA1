@@ -150,8 +150,35 @@ class DataLoader:
             .explode(df.columns[1:])
         )
 
+        # We can not apply interpolation in case there is no first or last value(s) are missing
+        # For these cases we take either the first or last non-null value
+        for col in cols_interpolate:
+            # Fill the first and last values with the first and last non-null values
+            df_interpolated = df_interpolated.with_columns([
+                pl.col(col).fill_null(strategy="forward").fill_null(strategy="backward")
+            ])
+
+
         # Sort the DataFrame by id and truncated_time
         df_interpolated = df_interpolated.sort(by=["id", "truncated_time"])
         return df_interpolated
+    
+    def add_features(self, df: pl.DataFrame, id_col:str, time_col:str) -> pl.DataFrame:
+        """
+        Add features to the DataFrame. The features are:
+        - time_since_last_obs: The time since the last observation in hours.
+        """
+        # Sort by id and time to ensure proper chronological order for each id
+        df = df.sort([id_col, time_col])
+        
+        # Compute time_since_last_obs
+        df = df.with_columns(
+            ((pl.col(time_col) - pl.col(time_col).shift(1))/3600000000)
+           .over(id_col).cast(pl.Int64).fill_null(0).alias("time_since_last_obs")
+        )
+        
+        return df
+    
+
 
 
