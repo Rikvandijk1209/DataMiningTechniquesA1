@@ -15,9 +15,9 @@ class DataLoader:
         # Load the data
         df = self.load_data()
         
+        
         # Transform the data to a pivot table
         df_pivot = self.transform_data(df, interval)
-        
         # Fill in missing dates, this method is skipped for now as rows that are missing for the mood are dropped
         # df_filled = self.fill_date_ranges(df_pivot, interval)
 
@@ -173,10 +173,25 @@ class DataLoader:
         
         # Compute time_since_last_obs
         df = df.with_columns(
-            ((pl.col(time_col) - pl.col(time_col).shift(1))/3600000000)
+            ((pl.col(time_col) - pl.col(time_col).shift(1))/3600000000) # This division is to convert nanoseconds to hours, kinda ugly I know
            .over(id_col).cast(pl.Int64).fill_null(0).alias("time_since_last_obs")
         )
         
+        return df
+    
+    def put_mood_into_buckets(self, df:pl.DataFrame, mood_interval:float) -> pl.DataFrame:
+        """
+        This function takes a DataFrame and a mood interval and puts the mood into buckets.
+        The mood is divided into buckets of the specified interval.
+        """ 
+        # Define the mood buckets
+        mood_buckets = [i * mood_interval for i in range(int(10/mood_interval) + 1)]
+        def assign_bucket(val):
+            return next((i for i in mood_buckets if val <= i), None)
+
+        df = df.with_columns(
+            pl.col("mood").map_elements(assign_bucket, return_dtype=pl.Float64).alias("mood")
+        )
         return df
     
 
