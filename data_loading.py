@@ -313,7 +313,7 @@ class DataPreprocessor:
         # Add the days since last observation feature to the test set
         test_df = test_df.with_columns(
             (pl.col(time_col) - pl.col("last_date")).dt.total_days().alias("days_since_last_obs")
-        )
+        ).drop("last_date")
 
         return train_df, test_df
     

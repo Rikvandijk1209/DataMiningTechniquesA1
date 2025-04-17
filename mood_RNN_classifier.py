@@ -1,140 +1,171 @@
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
-import torch.optim as optim
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset, DataLoader
-
-class MoodRNNClassifier(nn.Module):
-    def __init__(self, input_size: int, hidden_size: int, output_size: int):
-        super(MoodRNNClassifier, self).__init__()
-        self.hidden_size = hidden_size
-        self.rnn = nn.RNN(input_size, hidden_size, batch_first=True)
-        self.fc_out = nn.Linear(hidden_size, output_size)
-        
-    def forward(self, x: torch.Tensor):
-        # Ensure input x is 3D: (batch_size, seq_len, input_size)
-        if len(x.shape) == 2:  # If only batch_size and input_size (seq_len=1)
-            x = x.unsqueeze(1)  # Add seq_len dimension: (batch_size, 1, input_size)
-
-        # Pass through RNN
-        rnn_out, _ = self.rnn(x)
-
-        # Take the output of the last time step
-        last_hidden_state = rnn_out[:, -1, :]  # Last time step's hidden state
-
-        # Pass through final fully connected layer
-        out = self.fc_out(last_hidden_state)
-        return out
+from sklearn.model_selection import train_test_split
+import torch.nn.functional as F
+import optuna
+import matplotlib.pyplot as plt
 
 
 class MoodDataset(Dataset):
-    def __init__(self, features: torch.Tensor, target: torch.Tensor):
-        self.features = features
-        self.target = target
+    def __init__(self, df: pd.DataFrame, id_map: dict):
+        self.features = df.drop(columns=['id', 'mood', 'date']).values.astype(np.float32)
+        self.targets = df['mood'].values.astype(np.int64)
+        self.ids = df['id'].map(id_map).values.astype(np.int64)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.features)
 
-    def __getitem__(self, idx):
-        return self.features[idx], self.target[idx]
+    def __getitem__(self, idx: int):
+        return {
+            'x': torch.tensor(self.features[idx]),
+            'id': torch.tensor(self.ids[idx]),
+            'y': torch.tensor(self.targets[idx])
+        }
+    
+class RNNClassifier(nn.Module):
+    def __init__(self, input_dim: int, hidden_dim: int, id_count: int, id_embed_dim: int, output_dim: int = 39):
+        super().__init__()
+        self.id_embedding = nn.Embedding(id_count, id_embed_dim)
+        self.rnn = nn.GRU(input_dim + id_embed_dim, hidden_dim, batch_first=True)
+        self.classifier = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, x: torch.Tensor, id_tensor: torch.Tensor):
+        id_embed = self.id_embedding(id_tensor)
+        x_cat = torch.cat([x, id_embed], dim=-1).unsqueeze(1)  # add sequence dim
+        _, h_n = self.rnn(x_cat)
+        return self.classifier(h_n.squeeze(0))  # (batch, output_dim)
+    
+def train_epoch(model: nn.Module, loader: DataLoader, optimizer: torch.optim.Optimizer, criterion, device: torch.device) -> float:
+    model.train()
+    total_loss = 0
+    for batch in loader:
+        x, id_tensor, y = batch['x'].to(device), batch['id'].to(device), batch['y'].to(device)
+        optimizer.zero_grad()
+        logits = model(x, id_tensor)
+        loss = criterion(logits, y)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item() * len(x)
+    return total_loss / len(loader.dataset)
+
+def evaluate(model: nn.Module, loader: DataLoader, criterion, device: torch.device) -> float:
+    model.eval()
+    total_loss = 0
+    with torch.no_grad():
+        for batch in loader:
+            x, id_tensor, y = batch['x'].to(device), batch['id'].to(device), batch['y'].to(device)
+            logits = model(x, id_tensor)
+            loss = criterion(logits, y)
+            total_loss += loss.item() * len(x)
+    return total_loss / len(loader.dataset)
 
 
-class MoodRNNPipeline:
-    def __init__(self, id_column: str, time_column: str, target_column: str):
-        self.id_column = id_column
-        self.time_column = time_column
-        self.target_column = target_column
-        self.model = None
+class OrdinalLabelSmoothingLoss(nn.Module):
+    def __init__(self, num_classes: int, alpha: float = 0.1):
+        super().__init__()
+        self.num_classes = num_classes
+        self.alpha = alpha
+        self.kl_loss = nn.KLDivLoss(reduction='batchmean')
 
-    def preprocess(self, df: pd.DataFrame, feature_columns: list):
-        # Sort by ID and time
-        df = df.sort_values(by=[self.id_column, self.time_column])
-        
-        # Feature normalization (excluding the target)
-        feature_df = df[feature_columns]
-        scaler = StandardScaler()
-        features = scaler.fit_transform(feature_df)
+    def forward(self, logits, targets):
+        # logits: (batch_size, num_classes)
+        # targets: (batch_size,) — LongTensor of class indices
 
-        # Target: mood, don't normalize
-        target = df[self.target_column].values
-
-        return features, target
-
-    def create_dataloader(self, features: torch.Tensor, target: torch.Tensor, batch_size: int):
-        dataset = MoodDataset(features, target)
-        return DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-    def train(self, train_loader: DataLoader, val_loader: DataLoader, epochs: int = 20, learning_rate: float = 1e-3):
-        self.model = MoodRNNClassifier(input_size=train_loader.dataset.features.shape[1], hidden_size=32, output_size=1)
-        criterion = nn.MSELoss()  # Regression loss
-        optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
-
-        # Training loop
-        for epoch in range(epochs):
-            self.model.train()
-            total_loss = 0
-            for X_batch, y_batch in train_loader:
-                optimizer.zero_grad()
-                output = self.model(X_batch)
-                loss = criterion(output, y_batch.unsqueeze(1))  # Adjust y_batch shape
-                loss.backward()
-                optimizer.step()
-                total_loss += loss.item()
-
-            # Validation loop
-            self.model.eval()
-            val_loss = 0
-            with torch.no_grad():
-                for X_batch, y_batch in val_loader:
-                    output = self.model(X_batch)
-                    loss = criterion(output, y_batch.unsqueeze(1))  # Adjust y_batch shape
-                    val_loss += loss.item()
-
-            print(f"Epoch {epoch + 1}/{epochs}, Train Loss: {total_loss/len(train_loader)}, Validation Loss: {val_loss/len(val_loader)}")
-
-    def evaluate(self, test_loader: DataLoader) -> None:
-        self.model.eval()
-        criterion = nn.MSELoss()  # Since it's a regression task
-
-        all_preds = []
-        all_labels = []
-        test_loss = 0
-
+        # Create soft targets using distance-based Gaussian smoothing
         with torch.no_grad():
-            for X_batch, y_batch in test_loader:
-                output = self.model(X_batch)
-                loss = criterion(output, y_batch.unsqueeze(1))  # Adjust y_batch shape
-                test_loss += loss.item()
+            class_range = torch.arange(self.num_classes, device=logits.device).float()
+            targets = targets.unsqueeze(1).float()  # shape: (B, 1)
+            dist = class_range.unsqueeze(0) - targets  # (B, C)
+            soft_targets = torch.exp(-self.alpha * dist**2)
+            soft_targets = soft_targets / soft_targets.sum(dim=1, keepdim=True)
 
-                all_preds.append(output.numpy())
-                all_labels.append(y_batch.numpy())
+        log_probs = F.log_softmax(logits, dim=1)
+        return self.kl_loss(log_probs, soft_targets)
 
-        # Compute average test loss
-        avg_test_loss = test_loss / len(test_loader)
-        print(f"Test Loss: {avg_test_loss:.4f}")
+def objective(trial: optuna.Trial, train_df: pd.DataFrame, val_df: pd.DataFrame, id_map: dict, input_dim: int, id_count: int, output_dim:int, device: torch.device) -> float:
+    hidden_dim = trial.suggest_int('hidden_dim', 32, 128)
+    id_embed_dim = trial.suggest_int('id_embed_dim', 4, 16)
+    lr = trial.suggest_float('lr', 1e-4, 1e-2, log=True)
+    batch_size = trial.suggest_categorical('batch_size', [32, 64, 128])
+    alpha = trial.suggest_float("alpha", 0.01, 0.3)
 
-        # Flatten the predictions and labels
-        all_preds = np.concatenate(all_preds)
-        all_labels = np.concatenate(all_labels)
+    model = RNNClassifier(input_dim, hidden_dim, id_count, id_embed_dim, output_dim=output_dim).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    criterion = OrdinalLabelSmoothingLoss(num_classes=output_dim, alpha = alpha)
 
-        # Compute metrics
-        rmse = np.sqrt(mean_squared_error(all_labels, all_preds))
-        mae = mean_absolute_error(all_labels, all_preds)
-        r2 = r2_score(all_labels, all_preds)
+    train_loader = DataLoader(MoodDataset(train_df, id_map), batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(MoodDataset(val_df, id_map), batch_size=batch_size)
 
-        print(f"RMSE: {rmse:.4f}")
-        print(f"MAE: {mae:.4f}")
-        print(f"R²: {r2:.4f}")
+    for epoch in range(10):  # early stop/short training for Optuna
+        train_epoch(model, train_loader, optimizer, criterion, device)
 
-        # Plot Predicted vs Actual
-        plt.figure(figsize=(8, 6))
-        plt.scatter(all_labels, all_preds, alpha=0.5, color='blue')
-        plt.plot([min(all_labels), max(all_labels)], [min(all_labels), max(all_labels)], color='red', linestyle='--')
-        plt.xlabel('Actual Mood')
-        plt.ylabel('Predicted Mood')
-        plt.title('Predicted vs Actual Mood')
-        plt.show()
+    val_loss = evaluate(model, val_loader, criterion, device)
+    return val_loss
+
+
+class TestDataset(Dataset):
+    def __init__(self, df: pd.DataFrame, id_map: dict):
+        self.features = df.drop(columns=['id', 'mood', 'date']).values.astype(np.float32)
+        self.ids = df['id'].map(id_map).values.astype(np.int64)
+
+    def __len__(self) -> int:
+        return len(self.features)
+
+    def __getitem__(self, idx: int):
+        return {
+            'x': torch.tensor(self.features[idx]),
+            'id': torch.tensor(self.ids[idx])
+        }
+
+def predict(model: nn.Module, test_df: pd.DataFrame, id_map: dict, device: torch.device, batch_size: int = 32) -> np.ndarray:
+    model.eval()
+    dataset = TestDataset(test_df, id_map)
+    loader = DataLoader(dataset, batch_size=batch_size)
+    preds = []
+    with torch.no_grad():
+        for batch in loader:
+            x, id_tensor = batch['x'].to(device), batch['id'].to(device)
+            logits = model(x, id_tensor)
+            pred = torch.argmax(logits, dim=1)
+            preds.extend(pred.cpu().numpy())
+    return np.array(preds)
+
+
+def plot_mood_predictions(model, train_loader, device):
+    model.eval()  # Set the model to evaluation mode
+    all_preds = []
+    all_targets = []
+    
+    with torch.no_grad():  # Disable gradient tracking
+        for batch in train_loader:
+            inputs = batch['x']  # Using 'x' for inputs
+            targets = batch['y']  # Using 'y' for targets
+            id_tensor = batch['id']  # Get the 'id' tensor
+            
+            inputs = inputs.to(device)
+            targets = targets.to(device)
+            id_tensor = id_tensor.to(device)  # Send the ID tensor to the device
+            
+            # Make predictions
+            outputs = model(inputs, id_tensor)  # Pass the ID tensor to the model
+            _, predicted = torch.max(outputs, 1)  # Get the predicted classes
+            
+            # Store predictions and targets
+            all_preds.append(predicted.cpu().numpy())
+            all_targets.append(targets.cpu().numpy())
+    
+    # Flatten the lists for plotting
+    all_preds = [item for sublist in all_preds for item in sublist]
+    all_targets = [item for sublist in all_targets for item in sublist]
+    
+    # Plotting the results
+    plt.figure(figsize=(10, 6))
+    plt.scatter(all_targets, all_preds, alpha=0.5)
+    plt.plot([min(all_targets), max(all_targets)], [min(all_targets), max(all_targets)], 'r--')  # Ideal line (y=x)
+    plt.xlabel('True Mood')
+    plt.ylabel('Predicted Mood')
+    plt.title('True vs Predicted Mood')
+    plt.show()
