@@ -214,7 +214,7 @@ class DataLoader:
         """
         # Shift the feature values by one day
         df = df.with_columns(
-            pl.col(target_col).shift(1).alias(target_col)
+            pl.col(target_col).shift(-1).alias(target_col)
         )
         return df
     
