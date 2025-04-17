@@ -143,12 +143,18 @@ class DataPreprocessor:
 
         # Standardize the features in the training set
         df_train = df_train.with_columns([
-            (pl.col(col) - mean[col]) / std[col] for col in feature_cols
+            pl.when(std[col] == 0)  # Check if standard deviation is 0
+            .then(pl.lit(1).alias(col))  # Fill nulls with 1
+            .otherwise((pl.col(col) - mean[col]) / std[col]).alias(col)  # Otherwise, standardize
+            for col in feature_cols
         ])
 
         # Standardize the features in the test set
         df_test = df_test.with_columns([
-            (pl.col(col) - mean[col]) / std[col] for col in feature_cols
+            pl.when(std[col] == 0)  # Check if standard deviation is 0
+            .then(pl.lit(1).alias(col))  # Fill nulls with 1
+            .otherwise((pl.col(col) - mean[col]) / std[col]).alias(col)  # Otherwise, standardize
+            for col in feature_cols
         ])
 
         return df_train, df_test
@@ -294,9 +300,7 @@ class DataPreprocessor:
             .cum_count()
             .over(id_col) + 1)  # Start counting from 1
             .alias("step")
-        )
-        print(df)
-        
+        )        
         return df
     
     def train_test_split(self, df:pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
