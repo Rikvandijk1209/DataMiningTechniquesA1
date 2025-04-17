@@ -2,13 +2,15 @@ import polars as pl
 import pandas as pd
 import os
 from datetime import datetime, timedelta, date
+import matplotlib.pyplot as plt
+import numpy as np
 
 
 class DataPreprocessor:
     def __init__(self):
         pass
     
-    def load_and_preprocess_data(self, interval:str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def load_and_preprocess_data(self, interval:str, technique) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Load the data from the specified path, transform it to a pivot table, and fill in missing dates.
         """
@@ -17,7 +19,7 @@ class DataPreprocessor:
         
         # Transform the data to a pivot table
         df_pivot = self.transform_data(df, interval)
-
+        
         # Fill in missing dates, this method is skipped for now as rows that are missing for the mood are dropped
         df_filled = self.fill_date_ranges(df_pivot, interval)
 
@@ -27,9 +29,18 @@ class DataPreprocessor:
         # Add the features now to be included in interpolation
         df_features = self.add_features(df_bucketed, "id", "date")
 
-        # Handle missing values
-        df_interpolated = self.handle_missing_values(df_features)
-        
+        # Handle missing values based on the technique
+        if technique == 1:
+            df_interpolated = self.handle_missing_values(df_features)
+        elif technique == 2:
+            df_interpolated = self.handle_missing_values_decay(df_features)
+        elif technique == 3:
+            df_interpolated = self.handle_missing_values_with_filling(df_features)
+        else:
+            # Add fallback behavior or raise an error if technique is invalid
+            print(f"Warning: Invalid technique {technique}. Defaulting to technique 1 (interpolation).")
+            df_interpolated = self.handle_missing_values(df_features)  # Defaulting to technique 1
+
         # Since we will be predicting the mood, we have to shift all the feature values forward by 1 day
         df_shifted = self.shift_feature_values(df_interpolated)
 
@@ -40,12 +51,12 @@ class DataPreprocessor:
         # We can now remove the rows for which the mood is missing in the training set
         df_train = df_train.drop_nulls(subset=["mood"])
 
-        # We add a time_since_last_obs feature to the data
-        df_train, df_test = self.add_days_since_last_obs(df_train, df_test, "id", "date")
-
         # Standardize the features, we do it here to ensure that the features are standardized after nulls have been removed
         # The features of the test set are included in the calculation of the mean and standard deviation as they are known at this point
-        df_train, df_test = self.standardize_per_id(df_train, df_test)
+        df_train, df_test = self.standardize_features(df_train, df_test)
+
+        # We add a time_since_last_obs feature to the data
+        df_train, df_test = self.add_days_since_last_obs(df_train, df_test, "id", "date")
 
         return df_train.to_pandas(), df_test.to_pandas()
 
@@ -113,48 +124,25 @@ class DataPreprocessor:
         # Sort the columns
         return df_pivot.select(["id", "truncated_time"] + [var for var in unique_variables])
     
-    def standardize_per_id(self, df_train:pl.DataFrame, df_test:pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
-        new_df_train = pl.DataFrame()
-        new_df_test = pl.DataFrame()
-        for id in df_train["id"].unique():
-            id_train = df_train.filter(pl.col("id") == id)
-            id_test = df_test.filter(pl.col("id") == id)
-            # Use the standardize function
-            id_train, id_test = self.standardize_features(id_train, id_test)
-            # Add the standardized data to the new DataFrame
-            new_df_train = pl.concat([new_df_train, id_train])
-            new_df_test = pl.concat([new_df_test, id_test])
-        return new_df_train, new_df_test
-    
     def standardize_features(self, df_train:pl.DataFrame, df_test:pl.DataFrame) -> tuple[pl.DataFrame:pl.DataFrame]:
         """
         Standardize the features in the DataFrame.
         The features are standardized using the mean and standard deviation of the training set.
-        The standardization should be done on an id level
         """
-        # Get the feature columns
+        # Get the feature columns, all columns except id, date and mood (this will)
         feature_cols = list(set(df_train.columns) - set(["id", "date", "mood"]))
-        # We add a time_since_last_obs feature to the data
-        df_train, df_test = self.add_days_since_last_obs(df_train, df_test, "id", "date")
-
         # Get the mean and standard deviation of the training set
         mean = df_train[feature_cols].mean()
         std = df_train[feature_cols].std()
 
         # Standardize the features in the training set
         df_train = df_train.with_columns([
-            pl.when(std[col] == 0)  # Check if standard deviation is 0
-            .then(pl.lit(0).alias(col))  # Fill nulls with 0 as this would be the average of standardization
-            .otherwise((pl.col(col) - mean[col]) / std[col]).alias(col)  # Otherwise, standardize
-            for col in feature_cols
+            (pl.col(col) - mean[col]) / std[col] for col in feature_cols
         ])
 
         # Standardize the features in the test set
         df_test = df_test.with_columns([
-            pl.when(std[col] == 0)  # Check if standard deviation is 0
-            .then(pl.lit(0).alias(col))  # Fill nulls with 0 as this would be the average of standardization
-            .otherwise((pl.col(col) - mean[col]) / std[col]).alias(col)  # Otherwise, standardize
-            for col in feature_cols
+            (pl.col(col) - mean[col]) / std[col] for col in feature_cols
         ])
 
         return df_train, df_test
@@ -293,14 +281,7 @@ class DataPreprocessor:
         df = df.with_columns(
             pl.col(time_col).dt.weekday().alias("day_of_week")
         )
-
-        # Add a step per id to give the model a sense of time
-        df = df.with_columns(
-            (pl.col(id_col)
-            .cum_count()
-            .over(id_col) + 1)  # Start counting from 1
-            .alias("step")
-        )        
+        
         return df
     
     def train_test_split(self, df:pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
@@ -347,6 +328,132 @@ class DataPreprocessor:
 
         return train_df, test_df
     
+    
+
+    def handle_missing_values_decay(self, df: pl.DataFrame, alpha: float = 0.1) -> pl.DataFrame:
+        """
+        Fill missing values using exponential decay toward the column mean.
+        """
+        cols_decay = [col for col in df.columns if col not in ["id", "date"]]
+        df_filled = df.sort(["id", "date"])
+
+        # Group by ID and apply exponential decay row-wise
+        result_dfs = []
+
+        for user_id, group_df in df_filled.group_by("id"):
+            group_dict = {"id": [], "date": []}
+            for col in cols_decay:
+                group_dict[col] = []
+
+            group_np = group_df.to_pandas()
+            group_dict["id"] = group_np["id"].values
+            group_dict["date"] = group_np["date"].values
+
+            for col in cols_decay:
+                values = group_np[col].values
+                col_mean = np.nanmean(values)
+                filled = self._exponential_decay_fill(values, alpha=alpha, toward=col_mean)
+                group_dict[col] = filled
+
+            result_dfs.append(pl.DataFrame(group_dict))
+
+        df_result = pl.concat(result_dfs)
+        return df_result
+
+    def _exponential_decay_fill(self, values, alpha=0.1, toward=0.0):
+        """
+        Apply exponential decay to fill missing values.
+        Missing values decay toward a target (default: column mean).
+        """
+        filled = []
+        last_valid = None
+
+        for v in values:
+            if np.isnan(v):
+                if last_valid is None:
+                    new_val = toward
+                else:
+                    new_val = last_valid * (1 - alpha) + toward * alpha
+                filled.append(new_val)
+                last_valid = new_val
+            else:
+                filled.append(v)
+                last_valid = v
+
+        return filled
+
+
+
+
+    def compare_missing_values_strategies_plot(self, df_interpolated, df_decay, features=["activity", "mood", "circumplex.arousal", "circumplex.valence"]):
+        # Make sure 'truncated_time' is datetime
+        df_interpolated["truncated_time"] = pd.to_datetime(df_interpolated["date"])
+        df_decay["truncated_time"] = pd.to_datetime(df_decay["date"])
+
+        #df_interpolated = df_interpolated.with_columns(pl.col("truncated_time").cast(pl.Datetime))
+        #df_decay = df_decay.with_columns(pl.col("truncated_time").cast(pl.Datetime))
+
+        # Get all unique IDs
+        ids = df_interpolated["id"].drop_duplicates().sort_values().tolist()
+
+        #ids = df_interpolated.select("id").unique().sort("id")["id"].to_list()
+
+        for i in ids:
+            
+            df_interp_user = df_interpolated[df_interpolated["id"] == i].sort_values("truncated_time")
+            df_decay_user = df_decay[df_decay["id"] == i].sort_values("truncated_time")
+
+
+            df_interp_pd = df_interp_user.set_index("truncated_time")
+            df_decay_pd = df_decay_user.set_index("truncated_time")
+
+
+            plt.figure(figsize=(12, 6))
+
+            for feature in features:
+                plt.plot(df_interp_pd.index, df_interp_pd[feature], label=f"{feature} (Interp)", linestyle="--", marker="o")
+                plt.plot(df_decay_pd.index, df_decay_pd[feature], label=f"{feature} (Decay)", linestyle="-", marker="x")
+                
+
+
+            plt.title(f"User {i}")
+            plt.xlabel("Time")
+            plt.ylabel("Value")
+            plt.legend()
+            plt.grid(True)
+            plt.tight_layout()
+            plt.show()
+
+
+    def handle_missing_values_with_filling(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Fill missing (NaN) values in a dataframe using the following strategy:
+        1. Forward fill: If no previous non-null value exists, fill with the next available value.
+        2. Backward fill: If no next non-null value exists, fill with the last available value.
+        """
+        # Ensure the DataFrame is sorted by 'id' and 'date'
+        df = df.sort(by=["id", "date"])
+
+        # List all columns to be filled (except for non-numeric ones like "id" and "date")
+        cols_to_fill = [col for col in df.columns if col not in ["id", "date"]]
+
+        # Apply forward fill first
+        for col in cols_to_fill:
+            df = df.with_columns([
+                pl.col(col).fill_null(strategy="forward")
+            ])
+
+        # Then apply backward fill
+        for col in cols_to_fill:
+            df = df.with_columns([
+                pl.col(col).fill_null(strategy="backward")
+            ])
+
+        return df
+
+
+
+
 
 
 
