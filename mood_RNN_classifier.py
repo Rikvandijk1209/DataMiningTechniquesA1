@@ -70,7 +70,35 @@ def split_train_val(train_df: pd.DataFrame, fraction: float = 0.2) -> tuple[pd.D
     val_df_split = pd.concat([val_data for _, val_data in train_split_per_id])
 
     return train_df_split, val_df_split
+
+def train_final_model(model: nn.Module, train_loader: DataLoader, val_loader: DataLoader, optimizer: torch.optim.Optimizer, criterion, device: torch.device, num_epochs: int = 2000, patience: int = 5):
+    best_val_loss = float('inf')
+    best_model_state = None
+    epochs_without_improvement = 0
     
+    for epoch in range(num_epochs):
+        # Train the model on the training set
+        train_loss = train_epoch(model, train_loader, optimizer, criterion, device)
+        
+        # Evaluate the model on the validation set
+        val_loss = evaluate(model, val_loader, criterion, device)
+        
+        print(f"Epoch {epoch+1}: train loss = {train_loss:.4f}, val loss = {val_loss:.4f}")
+        
+        # If validation loss improves, save the model
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            best_model_state = model.state_dict()  # Save model parameters
+            epochs_without_improvement = 0  # Reset the counter
+        else:
+            epochs_without_improvement += 1
+    
+    # Load the best model (with the lowest validation loss)
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
+    
+    return model
+
 def train_epoch(model: nn.Module, loader: DataLoader, optimizer: torch.optim.Optimizer, criterion, device: torch.device) -> float:
     model.train()
     total_loss = 0
