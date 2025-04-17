@@ -38,6 +38,39 @@ class RNNClassifier(nn.Module):
         _, h_n = self.rnn(x_cat)
         return self.classifier(h_n.squeeze(0))  # (batch, output_dim)
     
+def split_train_val(train_df: pd.DataFrame, fraction: float = 0.2) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Splits the training DataFrame into training and validation sets for each unique `id`.
+    The split is done by time, ensuring that the training set contains earlier data than the validation set.
+    By doing this per id we ensure that the model is trained on past data and validated on future data for each user.
+    """
+    # Step 1: Split each `id`'s time series
+    train_ids = train_df['id'].unique()
+    train_split_per_id = []
+
+    for id in train_ids:
+        # Get all data for the current `id`
+        id_data = train_df[train_df['id'] == id]
+        
+        # Sort by time (assuming 'date' is the datetime column)
+        id_data_sorted = id_data.sort_values(by='date')
+        
+        # Calculate the split index (e.g., use 90% for training)
+        split_idx = int((1-fraction) * len(id_data_sorted))
+        
+        # Split the data
+        train_data = id_data_sorted[:split_idx]
+        val_data = id_data_sorted[split_idx:]
+        
+        # Append to the list of splits
+        train_split_per_id.append((train_data, val_data))
+
+    # Step 2: Combine all the training and validation splits
+    train_df_split = pd.concat([train_data for train_data, _ in train_split_per_id])
+    val_df_split = pd.concat([val_data for _, val_data in train_split_per_id])
+
+    return train_df_split, val_df_split
+    
 def train_epoch(model: nn.Module, loader: DataLoader, optimizer: torch.optim.Optimizer, criterion, device: torch.device) -> float:
     model.train()
     total_loss = 0

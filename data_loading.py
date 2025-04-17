@@ -40,12 +40,12 @@ class DataPreprocessor:
         # We can now remove the rows for which the mood is missing in the training set
         df_train = df_train.drop_nulls(subset=["mood"])
 
-        # Standardize the features, we do it here to ensure that the features are standardized after nulls have been removed
-        # The features of the test set are included in the calculation of the mean and standard deviation as they are known at this point
-        df_train, df_test = self.standardize_features(df_train, df_test)
-
         # We add a time_since_last_obs feature to the data
         df_train, df_test = self.add_days_since_last_obs(df_train, df_test, "id", "date")
+
+        # Standardize the features, we do it here to ensure that the features are standardized after nulls have been removed
+        # The features of the test set are included in the calculation of the mean and standard deviation as they are known at this point
+        df_train, df_test = self.standardize_per_id(df_train, df_test)
 
         return df_train.to_pandas(), df_test.to_pandas()
 
@@ -113,25 +113,48 @@ class DataPreprocessor:
         # Sort the columns
         return df_pivot.select(["id", "truncated_time"] + [var for var in unique_variables])
     
+    def standardize_per_id(self, df_train:pl.DataFrame, df_test:pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+        new_df_train = pl.DataFrame()
+        new_df_test = pl.DataFrame()
+        for id in df_train["id"].unique():
+            id_train = df_train.filter(pl.col("id") == id)
+            id_test = df_test.filter(pl.col("id") == id)
+            # Use the standardize function
+            id_train, id_test = self.standardize_features(id_train, id_test)
+            # Add the standardized data to the new DataFrame
+            new_df_train = pl.concat([new_df_train, id_train])
+            new_df_test = pl.concat([new_df_test, id_test])
+        return new_df_train, new_df_test
+    
     def standardize_features(self, df_train:pl.DataFrame, df_test:pl.DataFrame) -> tuple[pl.DataFrame:pl.DataFrame]:
         """
         Standardize the features in the DataFrame.
         The features are standardized using the mean and standard deviation of the training set.
+        The standardization should be done on an id level
         """
-        # Get the feature columns, all columns except id, date and mood (this will)
+        # Get the feature columns
         feature_cols = list(set(df_train.columns) - set(["id", "date", "mood"]))
+        # We add a time_since_last_obs feature to the data
+        df_train, df_test = self.add_days_since_last_obs(df_train, df_test, "id", "date")
+
         # Get the mean and standard deviation of the training set
         mean = df_train[feature_cols].mean()
         std = df_train[feature_cols].std()
 
         # Standardize the features in the training set
         df_train = df_train.with_columns([
-            (pl.col(col) - mean[col]) / std[col] for col in feature_cols
+            pl.when(std[col] == 0)  # Check if standard deviation is 0
+            .then(pl.lit(1).alias(col))  # Fill nulls with 1
+            .otherwise((pl.col(col) - mean[col]) / std[col]).alias(col)  # Otherwise, standardize
+            for col in feature_cols
         ])
 
         # Standardize the features in the test set
         df_test = df_test.with_columns([
-            (pl.col(col) - mean[col]) / std[col] for col in feature_cols
+            pl.when(std[col] == 0)  # Check if standard deviation is 0
+            .then(pl.lit(1).alias(col))  # Fill nulls with 1
+            .otherwise((pl.col(col) - mean[col]) / std[col]).alias(col)  # Otherwise, standardize
+            for col in feature_cols
         ])
 
         return df_train, df_test
@@ -270,7 +293,14 @@ class DataPreprocessor:
         df = df.with_columns(
             pl.col(time_col).dt.weekday().alias("day_of_week")
         )
-        
+
+        # Add a step per id to give the model a sense of time
+        df = df.with_columns(
+            (pl.col(id_col)
+            .cum_count()
+            .over(id_col) + 1)  # Start counting from 1
+            .alias("step")
+        )        
         return df
     
     def train_test_split(self, df:pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
