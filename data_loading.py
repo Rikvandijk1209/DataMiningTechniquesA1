@@ -4,11 +4,11 @@ import os
 from datetime import datetime, timedelta, date
 
 
-class DataLoader:
+class DataPreprocessor:
     def __init__(self):
         pass
     
-    def load_and_transform_data(self, interval:str) -> pl.DataFrame:
+    def load_and_preprocess_data(self, interval:str) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Load the data from the specified path, transform it to a pivot table, and fill in missing dates.
         """
@@ -17,12 +17,9 @@ class DataLoader:
         
         # Transform the data to a pivot table
         df_pivot = self.transform_data(df, interval)
-
-        # Standardize the features
-        df_stand = self.standardize_features(df_pivot)
         
         # Fill in missing dates, this method is skipped for now as rows that are missing for the mood are dropped
-        df_filled = self.fill_date_ranges(df_stand, interval)
+        df_filled = self.fill_date_ranges(df_pivot, interval)
         # Handle missing values
         df_interpolated = self.handle_missing_values(df_filled)
         
@@ -30,21 +27,26 @@ class DataLoader:
         df_shifted = self.shift_feature_values(df_interpolated)
 
         # We will put the mood into buckets, this is done to make the prediction easier
-        df_bucketed = self.put_mood_into_buckets(df_shifted, "mood", "mood_bucketed", 0.25)
+        df_bucketed = self.put_mood_into_buckets(df_shifted, "mood", "mood", 0.25)
         
         # Add the features now
         df_features = self.add_features(df_bucketed, "id", "date")
 
+        # Standardize the features, we do it here to ensure that the features are standardized after the missing values have been filled
+        # The features of the test set are included in the calculation of the mean and standard deviation as they are known at this point
+        df_stand = self.standardize_features(df_features)
+
         # We now split the data into training and test sets, where the test set only consists of the last row for each id
         # The training set consists of all the other rows
-        df_train, df_test = self.train_test_split(df_features)
+        df_train, df_test = self.train_test_split(df_stand)
 
         # We can now remove the rows for which the mood is missing in the training set
         df_train = df_train.drop_nulls(subset=["mood"])
 
         # We add a time_since_last_obs feature to the data
         df_train, df_test = self.add_days_since_last_obs(df_train, df_test, "id", "date")
-        return df_train, df_test
+
+        return df_train.to_pandas(), df_test.to_pandas()
 
     def load_data(self) -> pl.DataFrame:
         """
@@ -115,8 +117,8 @@ class DataLoader:
         Standardize the features in the DataFrame.
         The features are standardized using the mean and standard deviation of the training set.
         """
-        # Get the feature columns, all columns except id, date and mood
-        feature_cols = list(set(df.columns) - set(["id", "truncated_time", "mood"]))
+        # Get the feature columns, all columns except id, date and mood (this will)
+        feature_cols = list(set(df.columns) - set(["id", "date", "mood"]))
         # Get the mean and standard deviation of the training set
         mean = df[feature_cols].mean()
         std = df[feature_cols].std()
@@ -222,6 +224,7 @@ class DataLoader:
         """
         This function takes a DataFrame and a mood interval and puts the mood into buckets.
         The mood is divided into buckets of the specified interval.
+        Furthermore these buckets will become integers to allow for ordinal classification
         """ 
         # Define the mood buckets
         mood_buckets = [i * mood_interval for i in range(int(10/mood_interval) + 1)]
@@ -230,6 +233,15 @@ class DataLoader:
 
         df = df.with_columns(
             pl.col(target_col).map_elements(assign_bucket, return_dtype=pl.Float64).alias(bucketed_col_name)
+        )
+        # Convert the mood buckets to integers
+        def map_mood_to_integer(mood_value):
+            # Divide mood by 0.25 and round it to the nearest integer
+            return int(round(mood_value / 0.25))
+
+        # Apply the mapping function to the mood column (assuming column name is 'mood')
+        df = df.with_columns(
+            pl.col(bucketed_col_name).map_elements(map_mood_to_integer, return_dtype=pl.Int32).alias("mood")
         )
         return df
     
@@ -245,6 +257,11 @@ class DataLoader:
         # Lagged mood
         df = df.with_columns(
             pl.col("mood").shift(1).over(id_col).alias("lagged_mood")
+        )
+
+        # Day of the week
+        df = df.with_columns(
+            pl.col(time_col).dt.weekday().alias("day_of_week")
         )
         
         return df
@@ -280,7 +297,7 @@ class DataLoader:
 
         # Add the days since last observation feature to the training set
         train_df = train_df.with_columns(
-            (pl.col(time_col) - pl.col(time_col).shift(1)).dt.total_days().alias("days_since_last_obs")
+            (pl.col(time_col) - pl.col(time_col).shift(1)).dt.total_days().fill_null(0).alias("days_since_last_obs")
         )
         
         # For the test set we will first add the last date from the training set to the test set
