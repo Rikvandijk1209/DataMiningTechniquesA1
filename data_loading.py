@@ -20,28 +20,29 @@ class DataPreprocessor:
         
         # Fill in missing dates, this method is skipped for now as rows that are missing for the mood are dropped
         df_filled = self.fill_date_ranges(df_pivot, interval)
+
+        # We will put the mood into buckets, this is done to make the prediction easier
+        df_bucketed = self.put_mood_into_buckets(df_filled, "mood", "mood", 0.25)
+        
+        # Add the features now to be included in interpolation
+        df_features = self.add_features(df_bucketed, "id", "date")
+
         # Handle missing values
-        df_interpolated = self.handle_missing_values(df_filled)
+        df_interpolated = self.handle_missing_values(df_features)
         
         # Since we will be predicting the mood, we have to shift all the feature values forward by 1 day
         df_shifted = self.shift_feature_values(df_interpolated)
 
-        # We will put the mood into buckets, this is done to make the prediction easier
-        df_bucketed = self.put_mood_into_buckets(df_shifted, "mood", "mood", 0.25)
-        
-        # Add the features now
-        df_features = self.add_features(df_bucketed, "id", "date")
-
-        # Standardize the features, we do it here to ensure that the features are standardized after the missing values have been filled
-        # The features of the test set are included in the calculation of the mean and standard deviation as they are known at this point
-        df_stand = self.standardize_features(df_features)
-
         # We now split the data into training and test sets, where the test set only consists of the last row for each id
         # The training set consists of all the other rows
-        df_train, df_test = self.train_test_split(df_stand)
+        df_train, df_test = self.train_test_split(df_shifted)
 
         # We can now remove the rows for which the mood is missing in the training set
         df_train = df_train.drop_nulls(subset=["mood"])
+
+        # Standardize the features, we do it here to ensure that the features are standardized after nulls have been removed
+        # The features of the test set are included in the calculation of the mean and standard deviation as they are known at this point
+        df_train, df_test = self.standardize_features(df_train, df_test)
 
         # We add a time_since_last_obs feature to the data
         df_train, df_test = self.add_days_since_last_obs(df_train, df_test, "id", "date")
@@ -112,22 +113,28 @@ class DataPreprocessor:
         # Sort the columns
         return df_pivot.select(["id", "truncated_time"] + [var for var in unique_variables])
     
-    def standardize_features(self, df:pl.DataFrame) -> pl.DataFrame:
+    def standardize_features(self, df_train:pl.DataFrame, df_test:pl.DataFrame) -> tuple[pl.DataFrame:pl.DataFrame]:
         """
         Standardize the features in the DataFrame.
         The features are standardized using the mean and standard deviation of the training set.
         """
         # Get the feature columns, all columns except id, date and mood (this will)
-        feature_cols = list(set(df.columns) - set(["id", "date", "mood"]))
+        feature_cols = list(set(df_train.columns) - set(["id", "date", "mood"]))
         # Get the mean and standard deviation of the training set
-        mean = df[feature_cols].mean()
-        std = df[feature_cols].std()
+        mean = df_train[feature_cols].mean()
+        std = df_train[feature_cols].std()
 
         # Standardize the features in the training set
-        df = df.with_columns([
+        df_train = df_train.with_columns([
             (pl.col(col) - mean[col]) / std[col] for col in feature_cols
         ])
-        return df
+
+        # Standardize the features in the test set
+        df_test = df_test.with_columns([
+            (pl.col(col) - mean[col]) / std[col] for col in feature_cols
+        ])
+
+        return df_train, df_test
     
     def fill_date_ranges(self, df: pl.DataFrame, interval: str) -> pl.DataFrame:
         """
@@ -171,7 +178,7 @@ class DataPreprocessor:
 
         # We now define the numerical columns for which we should do interpolation 
         # Note that these are the same as the mean columns from before (minus the mood column)
-        cols_interpolate = ["circumplex.arousal", "circumplex.valence", "activity"]
+        cols_interpolate = ["circumplex.arousal", "circumplex.valence", "activity", "lagged_mood"]
 
         # Next we get the remaining columns for which we fill in 0, these are the sum columns from before
         cols = df.columns
@@ -209,14 +216,14 @@ class DataPreprocessor:
         df_interpolated = df_interpolated.sort(by=["id", "date"])
         return df_interpolated
     
-    def shift_feature_values(self, df: pl.DataFrame, target_col:str = "mood") -> pl.DataFrame:
+    def shift_feature_values(self, df: pl.DataFrame, id_col:str = "id", target_col:str = "mood") -> pl.DataFrame:
         """
         Shift the feature values in the DataFrame by one day.
         This is done to ensure that the features are from the previous day and not from the same day.
         """
         # Shift the feature values by one day
         df = df.with_columns(
-            pl.col(target_col).shift(-1).alias(target_col)
+            pl.col(target_col).shift(1).over(id_col).alias(target_col)
         )
         return df
     
@@ -254,9 +261,9 @@ class DataPreprocessor:
         # Sort by id and time to ensure proper chronological order for each id
         df = df.sort([id_col, time_col])
         
-        # Lagged mood
+        # Lagged mood, this is set to the current mood as we will shift the features later
         df = df.with_columns(
-            pl.col("mood").shift(1).over(id_col).alias("lagged_mood")
+            pl.col("mood").alias("lagged_mood")
         )
 
         # Day of the week
@@ -297,16 +304,16 @@ class DataPreprocessor:
 
         # Add the days since last observation feature to the training set
         train_df = train_df.with_columns(
-            (pl.col(time_col) - pl.col(time_col).shift(1)).dt.total_days().fill_null(0).alias("days_since_last_obs")
-        )
-        
+            (pl.col(time_col) - pl.col(time_col).shift(1).over(id_col)).dt.total_days().alias("days_since_last_obs")
+        ).fill_null(0)
         # For the test set we will first add the last date from the training set to the test set
-        last_dates = train_df.select(pl.col(id_col), pl.col(time_col).max().alias("last_date")).unique()
+        last_dates = train_df.group_by(id_col).agg(pl.col(time_col).last().alias("last_date"))
+        # Join the last dates with the test set to get the last date for each id
         test_df = test_df.join(last_dates, on=id_col, how="left")
         # Add the days since last observation feature to the test set
         test_df = test_df.with_columns(
             (pl.col(time_col) - pl.col("last_date")).dt.total_days().alias("days_since_last_obs")
-        ).drop("last_date")
+        )
 
         return train_df, test_df
     
