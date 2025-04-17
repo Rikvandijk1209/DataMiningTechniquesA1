@@ -17,7 +17,7 @@ class DataPreprocessor:
         
         # Transform the data to a pivot table
         df_pivot = self.transform_data(df, interval)
-        
+
         # Fill in missing dates, this method is skipped for now as rows that are missing for the mood are dropped
         df_filled = self.fill_date_ranges(df_pivot, interval)
 
@@ -144,7 +144,7 @@ class DataPreprocessor:
         # Standardize the features in the training set
         df_train = df_train.with_columns([
             pl.when(std[col] == 0)  # Check if standard deviation is 0
-            .then(pl.lit(1).alias(col))  # Fill nulls with 1
+            .then(pl.lit(0).alias(col))  # Fill nulls with 0 as this would be the average of standardization
             .otherwise((pl.col(col) - mean[col]) / std[col]).alias(col)  # Otherwise, standardize
             for col in feature_cols
         ])
@@ -152,7 +152,7 @@ class DataPreprocessor:
         # Standardize the features in the test set
         df_test = df_test.with_columns([
             pl.when(std[col] == 0)  # Check if standard deviation is 0
-            .then(pl.lit(1).alias(col))  # Fill nulls with 1
+            .then(pl.lit(0).alias(col))  # Fill nulls with 0 as this would be the average of standardization
             .otherwise((pl.col(col) - mean[col]) / std[col]).alias(col)  # Otherwise, standardize
             for col in feature_cols
         ])
