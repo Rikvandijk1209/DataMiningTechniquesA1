@@ -118,16 +118,16 @@ class DataExplorer:
         The interval of dates was used with 1 day as the eventual target is to predict mood per day.
         """
         # Aggregate on date (day) level
-        df = df.with_columns(pl.col("time").dt.truncate(truncation_string).alias("truncated_time"))
+        df = df.with_columns(pl.col("time").dt.truncate(truncation_string).alias("date"))
         # Here we apply all necessary transformations to later select per variable which to use
-        df_agg = df.group_by(["id", "truncated_time", "variable"]).agg([
+        df_agg = df.group_by(["id", "date", "variable"]).agg([
             pl.col("value").sum().alias("value_sum"), 
             pl.col("value").mean().alias("value_mean"),
-            ]).sort(["id", "truncated_time", "variable"])
+            ]).sort(["id", "date", "variable"])
         
         df_pivot:pl.DataFrame = df_agg.pivot(
             values=["value_sum", "value_mean"],
-            index = ["id", "truncated_time"],
+            index = ["id", "date"],
             columns = "variable",
         )
         # Specify for which variables we should use the mean, the others will use the sum
@@ -150,7 +150,7 @@ class DataExplorer:
         df_pivot = df_pivot.drop(drop_columns)
            
         # Sort the columns
-        return df_pivot.select(["id", "truncated_time"] + [var for var in unique_variables])
+        return df_pivot.select(["id", "date"] + [var for var in unique_variables])
                 
     def plot_time_series_data(self, df: pl.DataFrame):
         """
