@@ -8,7 +8,7 @@ class DataPreprocessor:
     def __init__(self):
         pass
     
-    def load_and_preprocess_data(self, interval:str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def load_and_preprocess_data(self, interval:str, bucket_step:float) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
         Load the data from the specified path, transform it to a pivot table, and fill in missing dates.
         """
@@ -18,11 +18,11 @@ class DataPreprocessor:
         # Transform the data to a pivot table
         df_pivot = self.transform_data(df, interval)
 
-        # Fill in missing dates, this method is skipped for now as rows that are missing for the mood are dropped
+        # Fill in missing dates
         df_filled = self.fill_date_ranges(df_pivot, interval)
 
         # We will put the mood into buckets, this is done to make the prediction easier
-        df_bucketed = self.put_mood_into_buckets(df_filled, "mood", "mood", 0.25)
+        df_bucketed = self.put_mood_into_buckets(df_filled, "mood", "mood", bucket_step)
         
         # Add the features now to be included in interpolation
         df_features = self.add_features(df_bucketed, "id", "date")
@@ -35,19 +35,27 @@ class DataPreprocessor:
 
         # We now split the data into training and test sets, where the test set only consists of the last row for each id
         # The training set consists of all the other rows
-        df_train, df_test = self.train_test_split(df_shifted)
+        df_train, df_pred = self.train_pred_split(df_shifted)
 
         # We can now remove the rows for which the mood is missing in the training set
         df_train = df_train.drop_nulls(subset=["mood"])
 
         # We add a time_since_last_obs feature to the data
-        df_train, df_test = self.add_days_since_last_obs(df_train, df_test, "id", "date")
+        df_train, df_pred = self.add_days_since_last_obs(df_train, df_pred, "id", "date")
+
+        # The following methods use pandas rather than polars
+        df_train = df_train.to_pandas()
+        df_pred = df_pred.to_pandas()
+
+        # We will now split the training set into a training and validation set
+        df_train, df_val = self.split_train_val(df_train, fraction=0.2)
 
         # Standardize the features, we do it here to ensure that the features are standardized after nulls have been removed
         # The features of the test set are included in the calculation of the mean and standard deviation as they are known at this point
-        df_train, df_test = self.standardize_per_id(df_train, df_test)
+        df_train, df_val = self.standardize_per_id(df_train, df_val)
+        df_train, df_pred = self.standardize_per_id(df_train, df_pred)
 
-        return df_train.to_pandas(), df_test.to_pandas()
+        return df_train, df_val, df_pred
 
     def load_data(self) -> pl.DataFrame:
         """
@@ -113,51 +121,46 @@ class DataPreprocessor:
         # Sort the columns
         return df_pivot.select(["id", "truncated_time"] + [var for var in unique_variables])
     
-    def standardize_per_id(self, df_train:pl.DataFrame, df_test:pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
-        new_df_train = pl.DataFrame()
-        new_df_test = pl.DataFrame()
-        for id in df_train["id"].unique():
-            id_train = df_train.filter(pl.col("id") == id)
-            id_test = df_test.filter(pl.col("id") == id)
-            # Use the standardize function
-            id_train, id_test = self.standardize_features(id_train, id_test)
-            # Add the standardized data to the new DataFrame
-            new_df_train = pl.concat([new_df_train, id_train])
-            new_df_test = pl.concat([new_df_test, id_test])
-        return new_df_train, new_df_test
+    def standardize_per_id(self, df_train: pd.DataFrame, df_pred: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+        new_train_dfs = []
+        new_pred_dfs = []
+        
+        for id_val in df_train["id"].unique():
+            id_train = df_train[df_train["id"] == id_val].copy()
+            id_pred = df_pred[df_pred["id"] == id_val].copy()
+            
+            id_train, id_pred = self.standardize_features(id_train, id_pred)
+            
+            new_train_dfs.append(id_train)
+            new_pred_dfs.append(id_pred)
+        
+        new_df_train = pd.concat(new_train_dfs, ignore_index=True)
+        new_df_pred = pd.concat(new_pred_dfs, ignore_index=True)
+        
+        return new_df_train, new_df_pred
     
-    def standardize_features(self, df_train:pl.DataFrame, df_test:pl.DataFrame) -> tuple[pl.DataFrame:pl.DataFrame]:
+    def standardize_features(self, df_train: pd.DataFrame, df_pred: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Standardize the features in the DataFrame.
-        The features are standardized using the mean and standard deviation of the training set.
-        The standardization should be done on an id level
+        Standardize the features in the DataFrame using training stats.
+        This is done on a per-ID level (handled in the caller function).
         """
-        # Get the feature columns
-        feature_cols = list(set(df_train.columns) - set(["id", "date", "mood"]))
-        # We add a time_since_last_obs feature to the data
-        df_train, df_test = self.add_days_since_last_obs(df_train, df_test, "id", "date")
+        df_train, df_pred = self.add_days_since_last_obs(df_train, df_pred, id_col="id", date_col="date")
 
-        # Get the mean and standard deviation of the training set
+        # Select feature columns
+        feature_cols = [col for col in df_train.columns if col not in ["id", "date", "mood"]]
+
+        # Compute mean and std from training set
         mean = df_train[feature_cols].mean()
         std = df_train[feature_cols].std()
 
-        # Standardize the features in the training set
-        df_train = df_train.with_columns([
-            pl.when(std[col] == 0)  # Check if standard deviation is 0
-            .then(pl.lit(0).alias(col))  # Fill nulls with 0 as this would be the average of standardization
-            .otherwise((pl.col(col) - mean[col]) / std[col]).alias(col)  # Otherwise, standardize
-            for col in feature_cols
-        ])
+        # Avoid division by zero by replacing 0 std with 1
+        std_replaced = std.replace(0, 1)
 
-        # Standardize the features in the test set
-        df_test = df_test.with_columns([
-            pl.when(std[col] == 0)  # Check if standard deviation is 0
-            .then(pl.lit(0).alias(col))  # Fill nulls with 0 as this would be the average of standardization
-            .otherwise((pl.col(col) - mean[col]) / std[col]).alias(col)  # Otherwise, standardize
-            for col in feature_cols
-        ])
+        # Standardize train and test using training stats
+        df_train[feature_cols] = (df_train[feature_cols] - mean) / std_replaced
+        df_pred[feature_cols] = (df_pred[feature_cols] - mean) / std_replaced
 
-        return df_train, df_test
+        return df_train, df_pred
     
     def fill_date_ranges(self, df: pl.DataFrame, interval: str) -> pl.DataFrame:
         """
@@ -262,7 +265,7 @@ class DataPreprocessor:
             return next((i for i in mood_buckets if val <= i), None)
 
         df = df.with_columns(
-            pl.col(target_col).map_elements(assign_bucket, return_dtype=pl.Float64).alias(bucketed_col_name)
+            pl.col(target_col).map_elements(assign_bucket, return_dtype=pl.Float32).alias(bucketed_col_name)
         )
         # Convert the mood buckets to integers
         def map_mood_to_integer(mood_value):
@@ -303,7 +306,7 @@ class DataPreprocessor:
         )        
         return df
     
-    def train_test_split(self, df:pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
+    def train_pred_split(self, df:pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
         """
         Split the DataFrame into training and test sets.
         The training set consists of all the rows except the last row based on date for each id.
@@ -320,6 +323,39 @@ class DataPreprocessor:
         test_df = test_df.sort(["id", "date"])
         
         return train_df, test_df
+    
+    def split_train_val(train_df: pd.DataFrame, fraction: float = 0.2) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Splits the training DataFrame into training and validation sets for each unique `id`.
+        The split is done by time, ensuring that the training set contains earlier data than the validation set.
+        By doing this per id we ensure that the model is trained on past data and validated on future data for each user.
+        """
+        # Step 1: Split each `id`'s time series
+        train_ids = train_df['id'].unique()
+        train_split_per_id = []
+
+        for id in train_ids:
+            # Get all data for the current `id`
+            id_data = train_df[train_df['id'] == id]
+            
+            # Sort by time (assuming 'date' is the datetime column)
+            id_data_sorted = id_data.sort_values(by='date')
+            
+            # Calculate the split index (e.g., use 90% for training)
+            split_idx = int((1-fraction) * len(id_data_sorted))
+            
+            # Split the data
+            train_data = id_data_sorted[:split_idx]
+            val_data = id_data_sorted[split_idx:]
+            
+            # Append to the list of splits
+            train_split_per_id.append((train_data, val_data))
+
+        # Step 2: Combine all the training and validation splits
+        train_df_split = pd.concat([train_data for train_data, _ in train_split_per_id])
+        val_df_split = pd.concat([val_data for _, val_data in train_split_per_id])
+
+        return train_df_split, val_df_split
 
     def add_days_since_last_obs(self, train_df:pl.DataFrame, test_df:pl.DataFrame, id_col:str, time_col:str) -> pl.DataFrame:
         """
