@@ -9,7 +9,7 @@ class DataPreprocessor:
     def __init__(self):
         pass
     
-    def load_and_preprocess_data(self, interval:str, bucket_step:float, technique: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    def load_and_preprocess_data(self, interval:str, bucket_step:float, technique: int, do_bucketing: bool = True) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
         Load the data from the specified path, transform it to a pivot table, and fill in missing dates.
         """
@@ -22,8 +22,12 @@ class DataPreprocessor:
         # Fill in missing dates
         df_filled = self.fill_date_ranges(df_pivot, interval)
 
-        # We will put the mood into buckets, this is done to make the prediction easier
-        df_bucketed = self.put_mood_into_buckets(df_filled, "mood", "mood", bucket_step)
+        if do_bucketing:
+            # We will put the mood into buckets, this is done to make the prediction easier
+            df_bucketed = self.put_mood_into_buckets(df_filled, "mood", "mood", bucket_step)
+        else:
+            # For the regression algorithms, it is not necessary to put the mood into buckets
+            df_bucketed = df_filled
         
         # Add the features now to be included in interpolation
         df_features = self.add_features(df_bucketed, "id", "date")
