@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, date
 import numpy as np
 import matplotlib.pyplot as plt
 
-
 class DataPreprocessor:
     def __init__(self):
         pass
@@ -131,7 +130,7 @@ class DataPreprocessor:
         df_pivot = df_pivot.with_columns(pl.col("truncated_time").cast(pl.Date))  
         # Sort the columns
         return df_pivot.select(["id", "truncated_time"] + [var for var in unique_variables])
-    
+      
     def standardize_per_id(self, df_train: pd.DataFrame, df_pred: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         new_train_dfs = []
         new_pred_dfs = []
@@ -307,14 +306,7 @@ class DataPreprocessor:
         df = df.with_columns(
             pl.col(time_col).dt.weekday().alias("day_of_week")
         )
-
-        # Add a step per id to give the model a sense of time
-        df = df.with_columns(
-            (pl.col(id_col)
-            .cum_count()
-            .over(id_col) + 1)  # Start counting from 1
-            .alias("step")
-        )        
+        
         return df
     
     def train_pred_split(self, df:pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
@@ -393,7 +385,7 @@ class DataPreprocessor:
         ).drop("last_date")
 
         return train_df, test_df
-    
+      
     def handle_missing_values_decay(self, df: pl.DataFrame, alpha: float = 0.1) -> pl.DataFrame:
         """
         Fill missing values using exponential decay toward the column mean.
@@ -445,6 +437,9 @@ class DataPreprocessor:
                 last_valid = v
 
         return filled
+
+
+
 
     def compare_missing_values_strategies_plot(self, df_interpolated, df_decay, features=["activity", "mood", "circumplex.arousal", "circumplex.valence"]):
         # Make sure 'truncated_time' is datetime
@@ -511,5 +506,7 @@ class DataPreprocessor:
             ])
 
         return df
+
+ 
 
 
