@@ -8,7 +8,7 @@ class DataPreprocessor:
     def __init__(self):
         pass
     
-    def load_and_preprocess_data(self, interval:str, bucket_step:float) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    def load_and_preprocess_data(self, interval:str, bucket_step:float, technique: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
         Load the data from the specified path, transform it to a pivot table, and fill in missing dates.
         """
@@ -27,8 +27,17 @@ class DataPreprocessor:
         # Add the features now to be included in interpolation
         df_features = self.add_features(df_bucketed, "id", "date")
 
-        # Handle missing values
-        df_interpolated = self.handle_missing_values(df_features)
+        # Handle missing values based on the technique
+        if technique == 1:
+            df_interpolated = self.handle_missing_values(df_features)
+        elif technique == 2:
+            df_interpolated = self.handle_missing_values_decay(df_features)
+        elif technique == 3:
+            df_interpolated = self.handle_missing_values_with_filling(df_features)
+        else:
+            # Add fallback behavior or raise an error if technique is invalid
+            print(f"Warning: Invalid technique {technique}. Defaulting to technique 1 (interpolation).")
+            df_interpolated = self.handle_missing_values(df_features)  # Defaulting to technique 1
         
         # Since we will be predicting the mood, we have to shift all the feature values forward by 1 day
         df_shifted = self.shift_feature_values(df_interpolated)
