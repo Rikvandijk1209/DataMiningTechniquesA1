@@ -69,6 +69,10 @@ class DataPreprocessor:
         df_train, df_val = self.standardize_per_id(df_train, df_val)
         df_train, df_pred = self.standardize_per_id(df_train, df_pred)
 
+        # Now we remove outliers from the training set after which we have to standardize the features again
+        df_train = self.remove_outliers(df_train , 6, "mood", "id", "date")
+        df_train, _ = self.standardize_per_id(df_train, df_val) # Just select the validation set but dont save it to avoid double standardization
+
         return df_train, df_val, df_pred
 
     def load_data(self) -> pl.DataFrame:
@@ -173,6 +177,25 @@ class DataPreprocessor:
         df_pred[feature_cols] = (df_pred[feature_cols] - mean) / std_replaced
 
         return df_train, df_pred
+    
+    def remove_outliers(self, df: pd.DataFrame, outlier_threshold: float, target_col: str, id_col: str, date_col: str) -> pd.DataFrame:
+        """"
+        Remove outliers on the feature columns. As these features have been standardized, we can remove the outliers based on the standardized predefined z-score.
+        """
+        feature_cols = [col for col in df.columns if col not in [id_col, date_col, target_col]]
+        original_size = df.shape[0]
+        num_obs_removed = 0
+        # Use the outlier threshold to filter out outliers
+        for col in feature_cols:
+            old_size = df.shape[0]
+            df = df[(df[col] >= -outlier_threshold) & (df[col] <= outlier_threshold)]
+            new_size = df.shape[0]
+            num_obs_removed += old_size - new_size
+
+        print(f"Removed {num_obs_removed} outliers from {original_size} observations. Percentage: {num_obs_removed/original_size:.2%}")
+        # Sort the DataFrame by id and date
+        df = df.sort_values(by=[id_col, date_col]).reset_index(drop=True)
+        return df
     
     def fill_date_ranges(self, df: pl.DataFrame, interval: str) -> pl.DataFrame:
         """
