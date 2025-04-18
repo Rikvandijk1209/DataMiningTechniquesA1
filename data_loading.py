@@ -10,7 +10,7 @@ class DataPreprocessor:
     def __init__(self):
         pass
     
-    def load_and_preprocess_data(self, interval:str, technique) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def load_and_preprocess_data(self, interval:str, bucket_step:float, technique: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
         Load the data from the specified path, transform it to a pivot table, and fill in missing dates.
         """
@@ -19,12 +19,12 @@ class DataPreprocessor:
         
         # Transform the data to a pivot table
         df_pivot = self.transform_data(df, interval)
-        
-        # Fill in missing dates, this method is skipped for now as rows that are missing for the mood are dropped
+
+        # Fill in missing dates
         df_filled = self.fill_date_ranges(df_pivot, interval)
 
         # We will put the mood into buckets, this is done to make the prediction easier
-        df_bucketed = self.put_mood_into_buckets(df_filled, "mood", "mood", 0.25)
+        df_bucketed = self.put_mood_into_buckets(df_filled, "mood", "mood", bucket_step)
         
         # Add the features now to be included in interpolation
         df_features = self.add_features(df_bucketed, "id", "date")
@@ -40,25 +40,33 @@ class DataPreprocessor:
             # Add fallback behavior or raise an error if technique is invalid
             print(f"Warning: Invalid technique {technique}. Defaulting to technique 1 (interpolation).")
             df_interpolated = self.handle_missing_values(df_features)  # Defaulting to technique 1
-
+        
         # Since we will be predicting the mood, we have to shift all the feature values forward by 1 day
         df_shifted = self.shift_feature_values(df_interpolated)
 
         # We now split the data into training and test sets, where the test set only consists of the last row for each id
         # The training set consists of all the other rows
-        df_train, df_test = self.train_test_split(df_shifted)
+        df_train, df_pred = self.train_pred_split(df_shifted)
 
         # We can now remove the rows for which the mood is missing in the training set
         df_train = df_train.drop_nulls(subset=["mood"])
 
+        # We add a time_since_last_obs feature to the data
+        df_train, df_pred = self.add_days_since_last_obs(df_train, df_pred, "id", "date")
+
+        # The following methods use pandas rather than polars
+        df_train = df_train.to_pandas()
+        df_pred = df_pred.to_pandas()
+
+        # We will now split the training set into a training and validation set
+        df_train, df_val = self.split_train_val(df_train, fraction=0.2)
+
         # Standardize the features, we do it here to ensure that the features are standardized after nulls have been removed
         # The features of the test set are included in the calculation of the mean and standard deviation as they are known at this point
-        df_train, df_test = self.standardize_features(df_train, df_test)
+        df_train, df_val = self.standardize_per_id(df_train, df_val)
+        df_train, df_pred = self.standardize_per_id(df_train, df_pred)
 
-        # We add a time_since_last_obs feature to the data
-        df_train, df_test = self.add_days_since_last_obs(df_train, df_test, "id", "date")
-
-        return df_train.to_pandas(), df_test.to_pandas()
+        return df_train, df_val, df_pred
 
     def load_data(self) -> pl.DataFrame:
         """
