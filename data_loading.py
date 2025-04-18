@@ -58,7 +58,7 @@ class DataPreprocessor:
         df_pred = df_pred.to_pandas()
 
         # We will now split the training set into a training and validation set
-        df_train, df_val = self.split_train_val(df_train, fraction=0.2)
+        df_train, df_val = self.split_train_val(df_train, 0.2)
 
         # Standardize the features, we do it here to ensure that the features are standardized after nulls have been removed
         # The features of the test set are included in the calculation of the mean and standard deviation as they are known at this point
@@ -327,7 +327,7 @@ class DataPreprocessor:
         
         return train_df, test_df
     
-    def split_train_val(train_df: pd.DataFrame, fraction: float = 0.2) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def split_train_val(self, train_df: pd.DataFrame, fraction: float) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Splits the training DataFrame into training and validation sets for each unique `id`.
         The split is done by time, ensuring that the training set contains earlier data than the validation set.
@@ -437,9 +437,6 @@ class DataPreprocessor:
                 last_valid = v
 
         return filled
-
-
-
 
     def compare_missing_values_strategies_plot(self, df_interpolated, df_decay, features=["activity", "mood", "circumplex.arousal", "circumplex.valence"]):
         # Make sure 'truncated_time' is datetime
