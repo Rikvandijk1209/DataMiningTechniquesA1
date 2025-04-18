@@ -130,7 +130,7 @@ class DataPreprocessor:
         df_pivot = df_pivot.with_columns(pl.col("truncated_time").cast(pl.Date))  
         # Sort the columns
         return df_pivot.select(["id", "truncated_time"] + [var for var in unique_variables])
-      
+    
     def standardize_per_id(self, df_train: pd.DataFrame, df_pred: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         new_train_dfs = []
         new_pred_dfs = []
@@ -154,8 +154,6 @@ class DataPreprocessor:
         Standardize the features in the DataFrame using training stats.
         This is done on a per-ID level (handled in the caller function).
         """
-        df_train, df_pred = self.add_days_since_last_obs(df_train, df_pred, id_col="id", date_col="date")
-
         # Select feature columns
         feature_cols = [col for col in df_train.columns if col not in ["id", "date", "mood"]]
 
@@ -306,7 +304,14 @@ class DataPreprocessor:
         df = df.with_columns(
             pl.col(time_col).dt.weekday().alias("day_of_week")
         )
-        
+
+        # Add a step per id to give the model a sense of time
+        df = df.with_columns(
+            (pl.col(id_col)
+            .cum_count()
+            .over(id_col) + 1)  # Start counting from 1
+            .alias("step")
+        )        
         return df
     
     def train_pred_split(self, df:pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
@@ -327,7 +332,7 @@ class DataPreprocessor:
         
         return train_df, test_df
     
-    def split_train_val(self, train_df: pd.DataFrame, fraction: float) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def split_train_val(self, train_df: pd.DataFrame, fraction: float = 0.2) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Splits the training DataFrame into training and validation sets for each unique `id`.
         The split is done by time, ensuring that the training set contains earlier data than the validation set.
