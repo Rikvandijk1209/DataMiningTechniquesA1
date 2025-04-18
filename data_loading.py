@@ -2,6 +2,8 @@ import polars as pl
 import pandas as pd
 import os
 from datetime import datetime, timedelta, date
+import numpy as np
+import matplotlib.pyplot as plt
 
 
 class DataPreprocessor:
@@ -392,6 +394,122 @@ class DataPreprocessor:
 
         return train_df, test_df
     
+    def handle_missing_values_decay(self, df: pl.DataFrame, alpha: float = 0.1) -> pl.DataFrame:
+        """
+        Fill missing values using exponential decay toward the column mean.
+        """
+        cols_decay = [col for col in df.columns if col not in ["id", "date"]]
+        df_filled = df.sort(["id", "date"])
 
+        # Group by ID and apply exponential decay row-wise
+        result_dfs = []
+
+        for user_id, group_df in df_filled.group_by("id"):
+            group_dict = {"id": [], "date": []}
+            for col in cols_decay:
+                group_dict[col] = []
+
+            group_np = group_df.to_pandas()
+            group_dict["id"] = group_np["id"].values
+            group_dict["date"] = group_np["date"].values
+
+            for col in cols_decay:
+                values = group_np[col].values
+                col_mean = np.nanmean(values)
+                filled = self._exponential_decay_fill(values, alpha=alpha, toward=col_mean)
+                group_dict[col] = filled
+
+            result_dfs.append(pl.DataFrame(group_dict))
+
+        df_result = pl.concat(result_dfs)
+        return df_result
+
+    def _exponential_decay_fill(self, values, alpha=0.1, toward=0.0):
+        """
+        Apply exponential decay to fill missing values.
+        Missing values decay toward a target (default: column mean).
+        """
+        filled = []
+        last_valid = None
+
+        for v in values:
+            if np.isnan(v):
+                if last_valid is None:
+                    new_val = toward
+                else:
+                    new_val = last_valid * (1 - alpha) + toward * alpha
+                filled.append(new_val)
+                last_valid = new_val
+            else:
+                filled.append(v)
+                last_valid = v
+
+        return filled
+
+    def compare_missing_values_strategies_plot(self, df_interpolated, df_decay, features=["activity", "mood", "circumplex.arousal", "circumplex.valence"]):
+        # Make sure 'truncated_time' is datetime
+        df_interpolated["truncated_time"] = pd.to_datetime(df_interpolated["date"])
+        df_decay["truncated_time"] = pd.to_datetime(df_decay["date"])
+
+        #df_interpolated = df_interpolated.with_columns(pl.col("truncated_time").cast(pl.Datetime))
+        #df_decay = df_decay.with_columns(pl.col("truncated_time").cast(pl.Datetime))
+
+        # Get all unique IDs
+        ids = df_interpolated["id"].drop_duplicates().sort_values().tolist()
+
+        #ids = df_interpolated.select("id").unique().sort("id")["id"].to_list()
+
+        for i in ids:
+            
+            df_interp_user = df_interpolated[df_interpolated["id"] == i].sort_values("truncated_time")
+            df_decay_user = df_decay[df_decay["id"] == i].sort_values("truncated_time")
+
+
+            df_interp_pd = df_interp_user.set_index("truncated_time")
+            df_decay_pd = df_decay_user.set_index("truncated_time")
+
+
+            plt.figure(figsize=(12, 6))
+
+            for feature in features:
+                plt.plot(df_interp_pd.index, df_interp_pd[feature], label=f"{feature} (Interp)", linestyle="--", marker="o")
+                plt.plot(df_decay_pd.index, df_decay_pd[feature], label=f"{feature} (Decay)", linestyle="-", marker="x")
+                
+
+
+            plt.title(f"User {i}")
+            plt.xlabel("Time")
+            plt.ylabel("Value")
+            plt.legend()
+            plt.grid(True)
+            plt.tight_layout()
+            plt.show()
+
+
+    def handle_missing_values_with_filling(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Fill missing (NaN) values in a dataframe using the following strategy:
+        1. Forward fill: If no previous non-null value exists, fill with the next available value.
+        2. Backward fill: If no next non-null value exists, fill with the last available value.
+        """
+        # Ensure the DataFrame is sorted by 'id' and 'date'
+        df = df.sort(by=["id", "date"])
+
+        # List all columns to be filled (except for non-numeric ones like "id" and "date")
+        cols_to_fill = [col for col in df.columns if col not in ["id", "date"]]
+
+        # Apply forward fill first
+        for col in cols_to_fill:
+            df = df.with_columns([
+                pl.col(col).fill_null(strategy="forward")
+            ])
+
+        # Then apply backward fill
+        for col in cols_to_fill:
+            df = df.with_columns([
+                pl.col(col).fill_null(strategy="backward")
+            ])
+
+        return df
 
 
