@@ -52,19 +52,19 @@ class RandomForestMoodModel:
 
         return rmse, mean_error
 
-    def plot_predicted_vs_actual(self, y_true, y_pred):
-        # Rescale the values by dividing by 4
-        y_true_rescaled = y_true / 4
-        y_pred_rescaled = y_pred / 4
+def plot_predicted_vs_actual(y_true, y_pred):
+    # Rescale the values by dividing by 4
+    y_true_rescaled = y_true / 4
+    y_pred_rescaled = y_pred / 4
 
-        # Create the plot
-        plt.figure(figsize=(8, 6))
-        plt.scatter(y_pred_rescaled, y_true_rescaled, color='blue', alpha=0.6)
-        plt.title('Predicted vs Actual Mood (Rescaled to 0-10)')
-        plt.xlabel('Predicted Mood (0-10)')
-        plt.ylabel('Actual Mood (0-10)')
-        plt.grid(True)
-        plt.show()
+    # Create the plot
+    plt.figure(figsize=(8, 6))
+    plt.scatter(y_pred_rescaled, y_true_rescaled, color='blue', alpha=0.6)
+    plt.title('Predicted vs Actual Mood (Rescaled to 0-10)')
+    plt.xlabel('Predicted Mood (0-10)')
+    plt.ylabel('Actual Mood (0-10)')
+    plt.grid(True)
+    plt.show()
 
 
 

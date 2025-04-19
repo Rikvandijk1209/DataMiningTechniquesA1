@@ -9,7 +9,7 @@ class DataPreprocessor:
     def __init__(self):
         pass
     
-    def load_and_preprocess_data(self, interval:str, bucket_step:float, technique: int, do_bucketing: bool = True) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    def load_and_preprocess_data(self, interval:str, bucket_step:float, technique: int, do_bucketing: bool = True, apply_train_val_split: bool = True) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
         Load the data from the specified path, transform it to a pivot table, and fill in missing dates.
         """
@@ -62,19 +62,21 @@ class DataPreprocessor:
         df_pred = df_pred.to_pandas()
 
         # We will now split the training set into a training and validation set
-        df_train, df_val = self.split_train_val(df_train, 0.2)
-
-        # Standardize the features, we do it here to ensure that the features are standardized after nulls have been removed
-        # The features of the test set are included in the calculation of the mean and standard deviation as they are known at this point
-        df_train_copy = df_train.copy() # Make a copy of the training set to avoid double standardization
-        df_train, df_val = self.standardize_per_id(df_train, df_val)
-        _, df_pred = self.standardize_per_id(df_train_copy, df_pred)
+        if apply_train_val_split:
+            df_train, df_val = self.split_train_val(df_train, 0.2)
+            _, df_val = self.standardize_per_id(df_train, df_val)
+        else:
+            # Standardize the features, we do it here to ensure that the features are standardized after nulls have been removed
+            # The features of the test set are included in the calculation of the mean and standard deviation as they are known at this point
+            df_train, df_pred = self.standardize_per_id(df_train, df_pred)
 
         # Now we remove outliers from the training set after which we have to standardize the features again
         df_train = self.remove_outliers(df_train , 6, "mood", "id", "date")
-        df_train, _ = self.standardize_per_id(df_train, df_val) # Just select the validation set but dont save it to avoid double standardization
-
-        return df_train, df_val, df_pred
+        df_train, _ = self.standardize_per_id(df_train, df_pred) # Just select the validation set but dont save it to avoid double standardization
+        if apply_train_val_split:
+            return df_train, df_val, df_pred
+        else:
+            return df_train, df_pred
 
     def load_data(self) -> pl.DataFrame:
         """
