@@ -66,14 +66,15 @@ class DataPreprocessor:
         if for_RNN_model:
             df_train, df_val = self.split_train_val(df_train, 0.2)
             _, df_val = self.standardize_per_id(df_train, df_val)
-        else:
-            # Standardize the features, we do it here to ensure that the features are standardized after nulls have been removed
-            # The features of the test set are included in the calculation of the mean and standard deviation as they are known at this point
-            df_train, df_pred = self.standardize_per_id(df_train, df_pred)
+        
+        # Standardize the features, we do it here to ensure that the features are standardized after nulls have been removed
+        # The features of the test set are included in the calculation of the mean and standard deviation as they are known at this point
+        df_train, df_pred = self.standardize_per_id(df_train, df_pred)
 
         # Now we remove outliers from the training set after which we have to standardize the features again
         df_train = self.remove_outliers(df_train , 6, "mood", "id", "date")
         df_train, _ = self.standardize_per_id(df_train, df_pred) # Just select the validation set but dont save it to avoid double standardization
+        
         if for_RNN_model:
             return df_train, df_val, df_pred
         else:
@@ -298,22 +299,14 @@ class DataPreprocessor:
         The mood is divided into buckets of the specified interval.
         Furthermore these buckets will become integers to allow for ordinal classification
         """ 
-        # Define the mood buckets
-        mood_buckets = [i * mood_interval for i in range(int(10/mood_interval) + 1)]
-        def assign_bucket(val):
-            return next((i for i in mood_buckets if val <= i), None)
-
-        df = df.with_columns(
-            pl.col(target_col).map_elements(assign_bucket, return_dtype=pl.Float32).alias(bucketed_col_name)
-        )
         # Convert the mood buckets to integers
         def map_mood_to_integer(mood_value):
-            # Divide mood by 0.25 and round it to the nearest integer
-            return int(round(mood_value / 0.25))
+            # Divide mood by mood_interval and round it to the nearest integer
+            return int(round(mood_value / mood_interval))
 
         # Apply the mapping function to the mood column (assuming column name is 'mood')
         df = df.with_columns(
-            pl.col(bucketed_col_name).map_elements(map_mood_to_integer, return_dtype=pl.Int32).alias("mood")
+            pl.col(target_col).map_elements(map_mood_to_integer, return_dtype=pl.Int32).alias(bucketed_col_name)
         )
         return df
     

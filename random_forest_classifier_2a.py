@@ -54,8 +54,8 @@ class RandomForestMoodModel:
 
 def plot_predicted_vs_actual(y_true, y_pred):
     # Rescale the values by dividing by 4
-    y_true_rescaled = y_true / 4
-    y_pred_rescaled = y_pred / 4
+    y_true_rescaled = y_true
+    y_pred_rescaled = y_pred
 
     # Create the plot
     plt.figure(figsize=(8, 6))
