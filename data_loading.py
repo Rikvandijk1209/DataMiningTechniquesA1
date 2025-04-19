@@ -335,7 +335,46 @@ class DataPreprocessor:
             .cum_count()
             .over(id_col) + 1)  # Start counting from 1
             .alias("timepoint")
-        )        
+        )
+        # Rolling average features over the last 3 days
+        df = df.with_columns([
+           pl.col("mood")
+              .rolling_mean(window_size=3)
+              .over("id")
+              .alias("avg_mood_3d"),
+    
+           pl.col("circumplex.arousal")
+             .rolling_mean(window_size=3)
+             .over("id")
+             .alias("avg_arousal_3d"),
+    
+           pl.col("circumplex.valence")
+              .rolling_mean(window_size=3)
+              .over("id")
+              .alias("avg_valence_3d"),
+    
+           pl.col("activity")
+               .rolling_mean(window_size=3)
+               .over("id")
+               .alias("avg_activity_3d"),
+    
+           pl.col("screen")
+               .rolling_mean(window_size=3)
+               .over("id")
+               .alias("avg_screen_3d"),
+
+          (pl.col("call") + pl.col("sms"))
+               .rolling_sum(window_size=3)
+               .over("id")
+               .alias("comm_count_3d")
+         ])
+
+        # Add weekend indicator
+        df = df.with_columns([
+            (pl.col(time_col).dt.weekday() >= 5).cast(pl.Int8).alias("is_weekend")
+        ])
+   
+                
         return df
     
     def train_pred_split(self, df:pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
