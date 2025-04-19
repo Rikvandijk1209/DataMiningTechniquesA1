@@ -127,7 +127,7 @@ def objective(trial: optuna.Trial, train_df: pd.DataFrame, val_df: pd.DataFrame,
     train_loader = DataLoader(MoodDataset(train_df, id_map), batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(MoodDataset(val_df, id_map), batch_size=batch_size)
 
-    for epoch in range(10):  # early stop/short training for Optuna
+    for epoch in range(20):  # early stop/short training for Optuna
         train_epoch(model, train_loader, optimizer, criterion, device)
 
     val_loss = evaluate(model, val_loader, criterion, device)
