@@ -9,7 +9,7 @@ class DataPreprocessor:
     def __init__(self):
         pass
     
-    def load_and_preprocess_data(self, interval:str, bucket_step:float, technique: int, do_bucketing: bool = True, apply_train_val_split: bool = True) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    def load_and_preprocess_data(self, interval:str, bucket_step:float, technique: int, do_bucketing: bool = True, for_RNN_model: bool = True) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
         Load the data from the specified path, transform it to a pivot table, and fill in missing dates.
         """
@@ -54,15 +54,16 @@ class DataPreprocessor:
         # We can now remove the rows for which the mood is missing in the training set
         df_train = df_train.drop_nulls(subset=["mood"])
 
-        # We add a time_since_last_obs feature to the data
-        df_train, df_pred = self.add_days_since_last_obs(df_train, df_pred, "id", "date")
+        if for_RNN_model:
+            # We add a time_since_last_obs feature to the data, this is sort of only for the RNN
+            df_train, df_pred = self.add_days_since_last_obs(df_train, df_pred, "id", "date")
 
         # The following methods use pandas rather than polars
         df_train = df_train.to_pandas()
         df_pred = df_pred.to_pandas()
 
         # We will now split the training set into a training and validation set
-        if apply_train_val_split:
+        if for_RNN_model:
             df_train, df_val = self.split_train_val(df_train, 0.2)
             _, df_val = self.standardize_per_id(df_train, df_val)
         else:
@@ -73,7 +74,7 @@ class DataPreprocessor:
         # Now we remove outliers from the training set after which we have to standardize the features again
         df_train = self.remove_outliers(df_train , 6, "mood", "id", "date")
         df_train, _ = self.standardize_per_id(df_train, df_pred) # Just select the validation set but dont save it to avoid double standardization
-        if apply_train_val_split:
+        if for_RNN_model:
             return df_train, df_val, df_pred
         else:
             return df_train, df_pred
@@ -335,12 +336,12 @@ class DataPreprocessor:
             pl.col(time_col).dt.weekday().alias("day_of_week")
         )
 
-        # Add a step per id to give the model a sense of time
+        # Add a timepoint per id to give the model a sense of time
         df = df.with_columns(
             (pl.col(id_col)
             .cum_count()
             .over(id_col) + 1)  # Start counting from 1
-            .alias("step")
+            .alias("timepoint")
         )        
         return df
     
