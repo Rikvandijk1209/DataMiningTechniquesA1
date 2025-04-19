@@ -186,11 +186,11 @@ def plot_mood_predictions(model, train_loader, device):
             all_targets.append(targets.cpu().numpy())
     
     # Flatten the lists for plotting
-    all_preds = [item for sublist in all_preds for item in sublist]
-    all_targets = [item for sublist in all_targets for item in sublist]
+    all_preds = [item/2 for sublist in all_preds for item in sublist]
+    all_targets = [item/2 for sublist in all_targets for item in sublist]
     
     # Plotting the results
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(8, 5))
     plt.scatter(all_targets, all_preds, alpha=0.5)
     plt.plot([min(all_targets), max(all_targets)], [min(all_targets), max(all_targets)], 'r--')  # Ideal line (y=x)
     plt.xlabel('True Mood')
