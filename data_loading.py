@@ -66,8 +66,9 @@ class DataPreprocessor:
 
         # Standardize the features, we do it here to ensure that the features are standardized after nulls have been removed
         # The features of the test set are included in the calculation of the mean and standard deviation as they are known at this point
+        df_train_copy = df_train.copy() # Make a copy of the training set to avoid double standardization
         df_train, df_val = self.standardize_per_id(df_train, df_val)
-        df_train, df_pred = self.standardize_per_id(df_train, df_pred)
+        _, df_pred = self.standardize_per_id(df_train_copy, df_pred)
 
         # Now we remove outliers from the training set after which we have to standardize the features again
         df_train = self.remove_outliers(df_train , 6, "mood", "id", "date")
@@ -146,7 +147,7 @@ class DataPreprocessor:
         for id_val in df_train["id"].unique():
             id_train = df_train[df_train["id"] == id_val].copy()
             id_pred = df_pred[df_pred["id"] == id_val].copy()
-            
+
             id_train, id_pred = self.standardize_features(id_train, id_pred)
             
             new_train_dfs.append(id_train)
@@ -284,7 +285,7 @@ class DataPreprocessor:
         """
         # Shift the feature values by one day
         df = df.with_columns(
-            pl.col(target_col).shift(1).over(id_col).alias(target_col)
+            pl.col(target_col).shift(-1).over(id_col).alias(target_col)
         )
         return df
     
