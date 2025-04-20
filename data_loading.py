@@ -76,7 +76,6 @@ class DataPreprocessor:
 
         # Now we remove outliers from the training set after which we have to standardize the features again
         df_train = self.remove_outliers(df_train , 6, "mood", "id", "date")
-        df_train, _ = self.standardize_per_id(df_train, df_pred) # Just select the validation set but dont save it to avoid double standardization
         
         if for_RNN_model:
             return df_train, df_val, df_pred
