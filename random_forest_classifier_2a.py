@@ -109,29 +109,48 @@ def predict_test(model: RandomForestMoodModel, df: pd.DataFrame, id_map: dict):
     return preds
 
 
-def plot_rf_predictions(model: RandomForestMoodModel, dataset: MoodTabularDataset):
-    X = np.array([sample['x'] for sample in dataset])
-    y_true = np.array([sample['y'] for sample in dataset])
-    y_pred = model.predict(X)
 
-    plt.figure(figsize=(10, 6))
-    plt.scatter(y_true, y_pred, alpha=0.4)
-    plt.plot([min(y_true), max(y_true)], [min(y_true), max(y_true)], 'r--')
-    plt.xlabel("True Mood")
-    plt.ylabel("Predicted Mood")
-    plt.title("Random Forest: True vs Predicted Mood")
+def plot_rf_predictions(y_true_train, y_pred_train, y_true_test, y_pred_test):
+    # Convert inputs to NumPy arrays
+    y_true_train = np.array(y_true_train)
+    y_pred_train = np.array(y_pred_train)
+    y_true_test = np.array(y_true_test)
+    y_pred_test = np.array(y_pred_test)
+
+    # Calculate metrics for training data
+    mape_train = np.mean(np.abs((y_true_train - y_pred_train) / y_true_train)) * 100
+    mae_train = np.mean(np.abs(y_true_train - y_pred_train))
+    mse_train = np.mean((y_true_train - y_pred_train) ** 2)
+    r_squared_train = 1 - (np.sum((y_true_train - y_pred_train) ** 2) / np.sum((y_true_train - np.mean(y_true_train)) ** 2))
+
+    # Calculate metrics for test data
+    mape_test = np.mean(np.abs((y_true_test - y_pred_test) / y_true_test)) * 100
+    mae_test = np.mean(np.abs(y_true_test - y_pred_test))
+    mse_test = np.mean((y_true_test - y_pred_test) ** 2)
+    r_squared_test = 1 - (np.sum((y_true_test - y_pred_test) ** 2) / np.sum((y_true_test - np.mean(y_true_test)) ** 2))
+
+    # Print Metrics
+    print(f'Training Data - MAPE: {mape_train:.2f}%, MAE: {mae_train:.2f}, MSE: {mse_train:.2f}, R_squared: {r_squared_train:.2f}')
+    print(f'Test Data - MAPE: {mape_test:.2f}%, MAE: {mae_test:.2f}, MSE: {mse_test:.2f}, R_squared: {r_squared_test:.2f}')
+
+    # Plotting for Training Data
+    plt.figure(figsize=(8, 5))
+    plt.scatter(y_true_train, y_pred_train, alpha=0.5)
+    plt.plot([min(y_true_train), max(y_true_train)], [min(y_true_train), max(y_true_train)], 'r--')  # Ideal line (y=x)
+    plt.xlabel('True Mood (Train)')
+    plt.ylabel('Predicted Mood (Train)')
+    plt.title('True vs Predicted Mood (Train)')
     plt.grid(True)
     plt.show()
 
-# Function to aggregate classes with few samples into "Other"
-def aggregate_classes(labels, min_samples=10):
-    """
-    Aggregates classes with fewer than `min_samples` occurrences into a new class called "Other".
-    """
-    class_counts = labels.value_counts()
-    small_classes = class_counts[class_counts < min_samples].index.tolist()
-    
-    # Map classes with fewer than min_samples to 'Other'
-    labels_aggregated = labels.replace({cls: 'Other' for cls in small_classes})
-    
-    return labels_aggregated
+    # Plotting for Test Data
+    plt.figure(figsize=(8, 5))
+    plt.scatter(y_true_test, y_pred_test, alpha=0.5)
+    plt.plot([min(y_true_test), max(y_true_test)], [min(y_true_test), max(y_true_test)], 'r--')  # Ideal line (y=x)
+    plt.xlabel('True Mood (Test)')
+    plt.ylabel('Predicted Mood (Test)')
+    plt.title('True vs Predicted Mood (Test)')
+    plt.grid(True)
+    plt.show()
+
+
