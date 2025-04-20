@@ -189,6 +189,12 @@ def plot_mood_predictions(model, train_loader, device):
     all_preds = [item/2 for sublist in all_preds for item in sublist]
     all_targets = [item/2 for sublist in all_targets for item in sublist]
     
+    # Calculate the MAPE, MAE, MSE, R_squared
+    mape = np.mean(np.abs((np.array(all_targets) - np.array(all_preds)) / np.array(all_targets))) * 100
+    mae = np.mean(np.abs(np.array(all_targets) - np.array(all_preds)))
+    mse = np.mean((np.array(all_targets) - np.array(all_preds)) ** 2)
+    r_squared = 1 - (np.sum((np.array(all_targets) - np.array(all_preds)) ** 2) / np.sum((np.array(all_targets) - np.mean(all_targets)) ** 2))
+    print(f'MAPE: {mape:.2f}%, MAE: {mae:.2f}, MSE: {mse:.2f}, R_squared: {r_squared:.2f}')
     # Plotting the results
     plt.figure(figsize=(8, 5))
     plt.scatter(all_targets, all_preds, alpha=0.5)
