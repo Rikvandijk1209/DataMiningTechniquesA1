@@ -372,7 +372,9 @@ class DataPreprocessor:
         # Add weekend indicator
         df = df.with_columns([
             (pl.col(time_col).dt.weekday() >= 5).cast(pl.Int8).alias("is_weekend")
-        ])        
+        ])
+   
+                
         return df
     
     def train_pred_split(self, df:pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
