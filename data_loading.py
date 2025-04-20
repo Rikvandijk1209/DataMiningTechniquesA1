@@ -44,8 +44,11 @@ class DataPreprocessor:
             print(f"Warning: Invalid technique {technique}. Defaulting to technique 1 (interpolation).")
             df_interpolated = self.handle_missing_values(df_features)  # Defaulting to technique 1
         
+        # Add rolling window features after missing value handling
+        df_rolling_features = self.add_rolling_window_features(df_interpolated, 3)
+
         # Since we will be predicting the mood, we have to shift all the feature values forward by 1 day
-        df_shifted = self.shift_feature_values(df_interpolated)
+        df_shifted = self.shift_feature_values(df_rolling_features)
 
         # We now split the data into training and test sets, where the test set only consists of the last row for each id
         # The training set consists of all the other rows
@@ -336,45 +339,47 @@ class DataPreprocessor:
             .over(id_col) + 1)  # Start counting from 1
             .alias("timepoint")
         )
-        # Rolling average features over the last 3 days
-        df = df.with_columns([
-           pl.col("mood")
-              .rolling_mean(window_size=3)
-              .over("id")
-              .alias("avg_mood_3d"),
-    
-           pl.col("circumplex.arousal")
-             .rolling_mean(window_size=3)
-             .over("id")
-             .alias("avg_arousal_3d"),
-    
-           pl.col("circumplex.valence")
-              .rolling_mean(window_size=3)
-              .over("id")
-              .alias("avg_valence_3d"),
-    
-           pl.col("activity")
-               .rolling_mean(window_size=3)
-               .over("id")
-               .alias("avg_activity_3d"),
-    
-           pl.col("screen")
-               .rolling_mean(window_size=3)
-               .over("id")
-               .alias("avg_screen_3d"),
-
-          (pl.col("call") + pl.col("sms"))
-               .rolling_sum(window_size=3)
-               .over("id")
-               .alias("comm_count_3d")
-         ])
-
         # Add weekend indicator
         df = df.with_columns([
             (pl.col(time_col).dt.weekday() >= 5).cast(pl.Int8).alias("is_weekend")
         ])
    
                 
+        return df
+    
+    def add_rolling_window_features(self, df: pl.DataFrame, window_size: int = 3) -> pl.DataFrame:
+        # Rolling average features over the last 3 days
+        df = df.with_columns([
+           pl.col("lagged_mood")
+              .rolling_mean(window_size=window_size)
+              .over("id")
+              .alias(f"avg_mood_{window_size}d"),
+    
+           pl.col("circumplex.arousal")
+             .rolling_mean(window_size=window_size)
+             .over("id")
+             .alias(f"avg_arousal_{window_size}d"),
+    
+           pl.col("circumplex.valence")
+              .rolling_mean(window_size=window_size)
+              .over("id")
+              .alias(f"avg_valence_3{window_size}"),
+    
+           pl.col("activity")
+               .rolling_mean(window_size=window_size)
+               .over("id")
+               .alias(f"avg_activity_{window_size}d"),
+    
+           pl.col("screen")
+               .rolling_mean(window_size=window_size)
+               .over("id")
+               .alias(f"avg_screen_{window_size}d"),
+
+          (pl.col("call") + pl.col("sms"))
+               .rolling_sum(window_size=window_size)
+               .over("id")
+               .alias(f"comm_count_{window_size}d")
+         ])
         return df
     
     def train_pred_split(self, df:pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
